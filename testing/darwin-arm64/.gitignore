@@ -1,0 +1,11 @@
+branch-call
+branch-cond
+branch-direct
+branch-indirect
+branch-test
+exit
+loop
+main
+printf
+random
+time

@@ -1,0 +1,15 @@
+#!/bin/bash
+
+if [ $# -eq 0 ]; then
+    echo "usage: $0 <command>"
+    exit 1
+fi
+
+CMD="$@"
+
+while true; do
+    eval "$CMD"
+    if [ $? -ne 0 ]; then
+        exit $?
+    fi
+done

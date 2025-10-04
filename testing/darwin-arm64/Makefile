@@ -4,6 +4,7 @@ TESTS += branch-bl
 TESTS += branch-br
 TESTS += branch-cond
 TESTS += main
+TESTS += printf
 TESTS += loop
 TESTS += random
 TESTS += time

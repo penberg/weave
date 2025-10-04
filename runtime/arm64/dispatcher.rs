@@ -41,7 +41,7 @@ use tracing::trace;
 ///
 /// # Arguments
 ///
-/// * `target` - The target address of the branch instruction
+/// * `target_addr` - The target address of the branch instruction
 ///
 /// # Returns
 ///
@@ -56,7 +56,7 @@ use tracing::trace;
 /// - It returns addresses that will be jumped to directly
 /// - Caller must ensure the context pointer is valid
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dispatcher(target_addr: usize, stack_ptr: *mut u8) -> usize {
+pub unsafe extern "C" fn dispatcher(target_addr: usize) -> usize {
     let ctx = runtime::get_current_context();
 
     // TODO: This will not work once we back-patch translated branches not to
@@ -91,29 +91,11 @@ pub unsafe extern "C" fn dispatcher(target_addr: usize, stack_ptr: *mut u8) -> u
         // The 8-byte offset skips the block header used by the translation system
         unsafe { block.text_start().add(8) as usize }
     } else {
-        // Target address is in the supervisor code, but we need to translate
-        // the return address if it points to guest code
-
-        // Get the current return address from x30 saved on stack
-        // x30 is saved at offset 0xf0 from stack pointer
-        let return_addr_ptr = unsafe { stack_ptr.add(0xf0) as *mut u64 };
-        let return_addr = unsafe { *return_addr_ptr };
-        let is_return_guest = return_addr >= ctx.text_start && return_addr < ctx.text_end;
-
-        if is_return_guest {
-            trace!("Translating return address block: 0x{:016x}", return_addr);
-            let return_block = translate_block(ctx, return_addr, ctx.text_end, false).unwrap();
-
-            // Update x30 on stack to point to translated return code
-            let translated_return_addr = unsafe { return_block.text_start().add(8) as u64 };
-            unsafe { *return_addr_ptr = translated_return_addr };
-            trace!(
-                "Updated x30 to translated return address: 0x{:016x}",
-                translated_return_addr
-            );
-        }
-
-        // Target address is in the supervisor code, execute directly.
+        // Target address is supervisor code (e.g., GOT stubs detected at translation time).
+        // Note: Prior to the simplification in commit 41425ab, this branch also handled
+        // return address translation for calls from guest to supervisor. That logic was
+        // removed because GOT stubs are now detected and translated at translation time,
+        // eliminating the need for runtime return address patching.
         target_addr as usize
     }
 }

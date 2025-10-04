@@ -108,7 +108,6 @@ _dispatcher_trampoline:
 	// Step 4: Invoke high-level dispatcher
 	// ----------------------------------------------------------
 	mov	x0, x16				// arg0: target address
-	add	x1, sp, #512			// arg1: CPU state ptr
 	bl	_dispatcher			// Call C dispatcher
 	mov	x16, x0				// Save new target
 

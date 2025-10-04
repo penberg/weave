@@ -3,6 +3,74 @@ use crate::{Error, Result};
 use disarm64::decoder;
 use tracing::trace;
 
+/// Check if addr points to start of GOT stub (adrp x16/ldr x16/br x16 pattern) and return supervisor address
+fn check_got_stub_at(ctx: &crate::runtime::ExecutionContext, addr: u64) -> Option<u64> {
+    let insn1 = fetch_insn(ctx, addr)?;
+    let insn2 = fetch_insn(ctx, addr + 4)?;
+    let insn3 = fetch_insn(ctx, addr + 8)?;
+
+    let decoded1 = decoder::decode(insn1)?;
+    let decoded2 = decoder::decode(insn2)?;
+    let decoded3 = decoder::decode(insn3)?;
+
+    // Check for adrp x16, <page>
+    let page_addr =
+        if let decoder::Operation::PCRELADDR(decoder::PCRELADDR::ADRP_Rd_ADDR_ADRP(adrp)) =
+            decoded1.operation
+        {
+            if adrp.rd() != 16 {
+                return None;
+            }
+            let imm21 = adrp.immlo() as i32 | ((adrp.immhi() as i32) << 2);
+            let signed_offset = if imm21 & 0x100000 != 0 {
+                imm21 | (-1i32 << 21)
+            } else {
+                imm21
+            };
+            let pc_page = addr & !0xfff;
+            pc_page.wrapping_add((signed_offset as i64 as u64) << 12)
+        } else {
+            return None;
+        };
+
+    // Check for ldr x16, [x16, #offset]
+    let got_addr = if let decoder::Operation::LDST_POS(decoder::LDST_POS::LDR_Rt_ADDR_UIMM12(ldr)) =
+        decoded2.operation
+    {
+        if ldr.rt() != 16 || ldr.rn() != 16 {
+            return None;
+        }
+        let offset = (ldr.imm12() as u64).checked_shl(3)?;
+        page_addr.checked_add(offset)?
+    } else {
+        return None;
+    };
+
+    // Check for br x16
+    if let decoder::Operation::BRANCH_REG(decoder::BRANCH_REG::BR_Rn(br)) = decoded3.operation {
+        if br.rn() != 16 {
+            return None;
+        }
+    } else {
+        return None;
+    }
+
+    // Validate GOT address is in reasonable range before dereferencing
+    if got_addr < 0x1000 || got_addr > 0x7fffffffffff {
+        return None;
+    }
+
+    // Read the supervisor function address from GOT
+    let supervisor_addr = unsafe { *(got_addr as *const u64) };
+
+    // Verify it's a supervisor address (outside guest text)
+    if supervisor_addr >= ctx.text_start && supervisor_addr < ctx.text_end {
+        return None;
+    }
+
+    Some(supervisor_addr)
+}
+
 /// Translate and cache a basic block
 pub fn translate_block(
     ctx: &mut crate::runtime::ExecutionContext,
@@ -14,6 +82,46 @@ pub fn translate_block(
     if let Some(block) = ctx.code_cache.get(&start_addr) {
         return Ok(block.clone());
     }
+
+    // Check if this is a GOT stub (adrp/ldr/br pattern)
+    if let Some(supervisor_addr) = check_got_stub_at(ctx, start_addr) {
+        trace!(
+            "Translating GOT stub at 0x{:016x} -> supervisor 0x{:016x}",
+            start_addr, supervisor_addr
+        );
+        let cache_addr: *mut u8 = ctx.text_allocator.start();
+        let mut block = unsafe { TranslatedBlockBuilder::new(cache_addr) };
+
+        // Save guest return address from x30 to x19 BEFORE calling supervisor
+        // (blr will overwrite x30 with the return address in our translated code)
+        // We use x19 because it's callee-saved - supervisor won't clobber it
+        // stp x19, x20, [sp, #-16]!  - save x19/x20 to stack
+        block.asm.emit(0xa9bf53f3);
+        // mov x19, x30
+        block.asm.emit(0xaa1e03f3);
+
+        // Call the supervisor function
+        block.asm.emit_ld_imm(16, supervisor_addr);
+        block.asm.emit_blr(16);
+
+        // After supervisor returns, dispatch to guest return address in x19
+        // mov x16, x19
+        block.asm.emit(0xaa1303f0);
+        // ldp x19, x20, [sp], #16  - restore x19/x20 from stack
+        block.asm.emit(0xa8c153f3);
+
+        // Branch to dispatcher trampoline
+        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+        block.asm.emit_b_imm(dispatcher_addr);
+
+        let block = block.finish();
+        ctx.text_allocator.reserve(block.size());
+        super::flush_icache_range(cache_addr, block.size());
+        ctx.code_cache.insert(start_addr, block.clone());
+        trace!("GOT stub block cached at {:p}", cache_addr);
+        return Ok(block);
+    }
+
     let cache_addr: *mut u8 = ctx.text_allocator.start();
     let mut block = unsafe { TranslatedBlockBuilder::new(cache_addr) };
     let mut addr = start_addr;

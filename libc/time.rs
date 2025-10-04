@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types)]
 
-use crate::runtime::arm64::TIME_TICK;
+use crate::runtime::arch::TIME_TICK;
 use std::sync::atomic::Ordering;
 
 /// Time in seconds.

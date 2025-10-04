@@ -1,5 +1,11 @@
+#[cfg(target_os = "macos")]
 pub mod darwin;
+
 pub mod libc;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 pub mod mmap;
 pub mod runtime;
 
@@ -13,10 +19,10 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 pub use mmap::MappedFile;
 
-#[cfg(target_arch = "aarch64")]
 pub use runtime::{CpuState, ExecutionContext};
 
 /// Probe the host architecture
+#[cfg(target_os = "macos")]
 pub fn probe_host_arch() -> darwin::dyld::Arch {
     if cfg!(target_arch = "aarch64") {
         darwin::dyld::Arch::AArch64

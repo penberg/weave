@@ -14,12 +14,12 @@
 Modern software contains non-deterministic bugs that appear randomly and disappear when attempting to reproduce them. Weave eliminates this unpredictability by controlling all sources of randomness, providing a systematic approach to debugging hard-to-reproduce bugs for both humans and AI coding agents with perfect repeatability.
 
 > [!NOTE]
-> **Weave is currently in early development and only has [limited support](COMPAT.md) for Darwin/arm64.**
+> **Weave is currently in early development and only has [limited support](COMPAT.md) for Darwin/arm64 and Linux/x86.**
 
 ### Features
 
 * Deterministic time simulation
-* Runs on Darwin/arm64
+* Runs on Darwin/arm64 and Linux/x86
 
 ## 🧑‍💻 Getting Started
 

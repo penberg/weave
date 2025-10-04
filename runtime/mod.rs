@@ -2,10 +2,18 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 
 #[cfg(target_arch = "aarch64")]
-pub use arm64::{CpuState, TextAllocator, TranslatedBlock, flush_icache_range};
+pub mod arm64;
 
 #[cfg(target_arch = "aarch64")]
-pub mod arm64;
+pub use arm64 as arch;
+
+#[cfg(target_arch = "x86_64")]
+pub mod x86;
+
+#[cfg(target_arch = "x86_64")]
+pub use x86 as arch;
+
+pub use arch::{CpuState, TextAllocator, TranslatedBlock, flush_icache_range};
 
 /// Execution context that the runtime uses - independent of darwin/OS layer
 pub struct ExecutionContext {
@@ -46,7 +54,7 @@ impl ExecutionContext {
 
     /// Run execution - this can return if the main function returns
     pub fn run(&mut self) -> i32 {
-        arm64::translate_and_run(self, true).unwrap()
+        arch::translate_and_run(self, true).unwrap()
     }
 }
 

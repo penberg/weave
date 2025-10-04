@@ -12,9 +12,9 @@ use tracing::trace;
 // Time tick counter for deterministic time simulation
 pub static TIME_TICK: AtomicU64 = AtomicU64::new(0);
 
-pub const ARM64_INSN_SIZE: usize = 4;
+pub const X86_MAX_INSN_SIZE: usize = 15;
 
-/// Start execution of an execution context - this never returns!
+/// Start execution of an execution context
 pub fn translate_and_run(
     ctx: &mut crate::runtime::ExecutionContext,
     returnable: bool,
@@ -47,11 +47,11 @@ pub fn translate_and_branch_to(
     Ok(target_addr)
 }
 
-/// Allocates memory for the text segment.
+/// Allocates memory for the text segment
 pub struct TextAllocator {
-    /// The allocated text segment.
+    /// The allocated text segment
     base: *mut u8,
-    /// First free address.
+    /// First free address
     first_free: usize,
 }
 
@@ -64,7 +64,7 @@ impl TextAllocator {
                 std::ptr::null_mut(),
                 Self::MAX_SIZE,
                 libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_JIT,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
                 0,
             )
@@ -79,42 +79,31 @@ impl TextAllocator {
     }
 
     pub fn start(&self) -> *mut u8 {
-        unsafe { pthread_jit_write_protect_np(0) };
         unsafe { self.base.add(self.first_free) }
     }
 
     pub fn reserve(&mut self, size: usize) -> *mut u8 {
         let addr = unsafe { self.base.add(self.first_free) };
         self.first_free += size;
-        unsafe { pthread_jit_write_protect_np(1) };
         addr
     }
 }
 
+/// x86-64 CPU state
+///
+/// This layout matches exactly what's on the stack in dispatcher.S:
+/// RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8-R15, RFLAGS, (padding)
 #[derive(Debug)]
 #[repr(C)]
 pub struct CpuState {
-    /// General-purpose registers.
-    pub regs: [u64; 31],
+    /// General-purpose registers (RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8-R15)
+    pub regs: [u64; 16],
 
-    /// Program counter.
+    /// RFLAGS register
+    pub rflags: u64,
+
+    /// Program counter (RIP) - not saved during syscalls, used for block execution
     pub pc: u64,
-
-    /// NZCV flags register
-    pub nzcv: u32,
-
-    /// Floating-point Control Register
-    pub fpcr: u32,
-
-    /// Floating-point Status Register
-    pub fpsr: u32,
-
-    /// Padding to maintain alignment
-    _padding: u32,
-
-    /// NEON/SIMD vector registers (Q0-Q31)
-    /// Each Q register is 128 bits (16 bytes), represented as two u64 values
-    pub vregs: [[u64; 2]; 32],
 }
 
 impl Default for CpuState {
@@ -126,30 +115,18 @@ impl Default for CpuState {
 impl CpuState {
     pub fn new() -> Self {
         Self {
-            regs: [0; 31],
+            regs: [0; 16],
             pc: 0,
-            nzcv: 0,
-            fpcr: 0,
-            fpsr: 0,
-            _padding: 0,
-            vregs: [[0; 2]; 32],
+            rflags: 0x202, // IF flag set
         }
     }
 }
 
-/// Flush the instruction cache for the given range using macOS system call
-pub fn flush_icache_range(start: *const u8, size: usize) {
-    // Use macOS sys_icache_invalidate system call for reliable I-cache flushing
+/// Flush the instruction cache for the given range
+pub fn flush_icache_range(_start: *const u8, _size: usize) {
+    // x86-64 has coherent I-cache, no flush needed
+    // But we add a memory barrier for safety
     unsafe {
-        sys_icache_invalidate(start as *mut libc::c_void, size);
-
-        // Additional barriers for extra safety
-        std::arch::asm!("dsb sy");
-        std::arch::asm!("isb");
+        std::arch::asm!("mfence");
     }
-}
-
-unsafe extern "C" {
-    pub(crate) fn pthread_jit_write_protect_np(enabled: libc::c_int);
-    pub(crate) fn sys_icache_invalidate(start: *mut libc::c_void, size: libc::size_t);
 }

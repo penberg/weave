@@ -17,7 +17,10 @@
 //! - FFI with assembly trampolines
 //! - Raw pointer dereferencing for performance
 
-use super::{CpuState, TIME_TICK, translate::translate_block};
+use crate::runtime::{
+    self,
+    arm64::{CpuState, TIME_TICK, translate::translate_block},
+};
 use core::arch::global_asm;
 use std::sync::atomic::Ordering;
 use tracing::trace;
@@ -54,8 +57,7 @@ use tracing::trace;
 /// - Caller must ensure the context pointer is valid
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dispatcher(target_addr: usize, stack_ptr: *mut u8) -> usize {
-    let ctx_ptr = crate::runtime::get_current_context();
-    let ctx = unsafe { &mut *ctx_ptr };
+    let ctx = runtime::get_current_context();
 
     // TODO: This will not work once we back-patch translated branches not to
     // call into the dispatcher. We need to increment time tick in the exit stubs instead.
@@ -144,8 +146,7 @@ pub unsafe extern "C" fn dispatcher(target_addr: usize, stack_ptr: *mut u8) -> u
 /// - The syscall handler must not corrupt the CPU state
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn syscall_handler(cpu_state: *mut CpuState, svc_imm: u32) {
-    let ctx_ptr = crate::runtime::get_current_context();
-    let ctx = unsafe { &*ctx_ptr };
+    let ctx = runtime::get_current_context();
 
     trace!("syscall_handler(svc_imm: {})", svc_imm);
 

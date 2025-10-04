@@ -61,6 +61,7 @@ pub fn set_current_context(ctx: *mut ExecutionContext) {
 }
 
 /// Get the current execution context for this thread
-pub fn get_current_context() -> *mut ExecutionContext {
-    CURRENT_CONTEXT.with(|c| c.get().expect("no current execution context set"))
+pub fn get_current_context() -> &'static mut ExecutionContext {
+    let ctx_ptr = CURRENT_CONTEXT.with(|c| c.get().expect("no current execution context set"));
+    unsafe { &mut *ctx_ptr }
 }

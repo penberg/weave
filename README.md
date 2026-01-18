@@ -59,6 +59,18 @@ By combining deterministic execution with binary translation, Weave makes previo
 
 **[Hermit]** is a program that translates non-deterministic program behavior into deterministic, repeatable behavior, similar to what Weave aims to do, but using `ptrace` to intercept system calls (Leija, 2020). Unfortunately, Hermit is no longer under active development and is limited to Linux/x86-64.
 
+## License
+
+This project is licensed under the [MIT license].
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Turso Database by you, shall be licensed as MIT, without any additional
+terms or conditions.
+
+[MIT license]: LICENSE.md
+
 ## 🎓 Theory
 
 Derek Bruening, Qin Zhao, and Saman Amarasinghe. (2012). "[Transparent Dynamic Instrumentation](https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/38225.pdf). In _VEE '12_.

@@ -48,10 +48,17 @@ impl Assembler {
             self.emit_u8(0xe9); // JMP rel32
             self.emit_u32(offset as i32 as u32);
         } else {
-            // Target is out of range, use indirect jump via R11 (caller-saved, safe to clobber)
-            // MOV R11, imm64 + JMP R11
-            self.emit_mov_imm64(11, target_addr); // R11 = register 11
-            self.emit_jmp_reg(11);
+            // Target is out of range, use push+ret to avoid clobbering any guest register
+            // SUB RSP, 8
+            self.emit_bytes(&[0x48, 0x83, 0xec, 0x08]);
+            // MOV DWORD PTR [RSP], low32
+            self.emit_bytes(&[0xc7, 0x04, 0x24]);
+            self.emit_u32(target_addr as u32);
+            // MOV DWORD PTR [RSP+4], high32
+            self.emit_bytes(&[0xc7, 0x44, 0x24, 0x04]);
+            self.emit_u32((target_addr >> 32) as u32);
+            // RET (pops the address and jumps to it, net RSP change = 0)
+            self.emit_u8(0xc3);
         }
     }
 
@@ -78,10 +85,17 @@ impl Assembler {
             self.emit_u8(0xe8);
             self.emit_u32(offset as i32 as u32);
         } else {
-            // Target is out of range, use indirect call via R11 (caller-saved, safe to clobber)
-            // MOV R11, imm64 + CALL R11
-            self.emit_mov_imm64(11, target_addr); // R11 = register 11
+            // Target is out of range, save R11 around the indirect call
+            // PUSH R11
+            self.emit_push_reg64(11);
+            // MOV R11, imm64
+            self.emit_mov_imm64(11, target_addr);
+            // CALL R11
             self.emit_call_reg(11);
+            // After call returns, RSP points to saved R11 (call pushed/popped return addr)
+            // POP R11 (restore guest R11)
+            self.emit_u8(0x41); // REX.B
+            self.emit_u8(0x5b); // POP R11 (0x58 + 3)
         }
     }
 
@@ -94,14 +108,6 @@ impl Assembler {
         self.emit_u8(0xd0 | (reg & 0x7)); // ModRM: 11 010 reg
     }
 
-    /// Emits a JMP instruction to a register (JMP reg)
-    pub fn emit_jmp_reg(&mut self, reg: u8) {
-        if reg >= 8 {
-            self.emit_u8(0x41); // REX.B prefix for R8-R15
-        }
-        self.emit_u8(0xff); // JMP r/m64
-        self.emit_u8(0xe0 | (reg & 0x7)); // ModRM: 11 100 reg
-    }
 
     /// Emits a PUSH instruction for 64-bit register
     /// PUSH r64
@@ -114,6 +120,7 @@ impl Assembler {
 
     /// Emits a POP instruction for 64-bit register
     /// POP r64
+    #[allow(dead_code)]
     pub fn emit_pop_reg64(&mut self, reg: u8) {
         if reg >= 8 {
             self.emit_u8(0x41); // REX.B prefix for R8-R15
@@ -143,6 +150,196 @@ impl Assembler {
         // ModRM byte: 11 (register mode) + src (reg field) + dst (r/m field)
         let modrm = 0xc0 | ((src & 7) << 3) | (dst & 7);
         self.emit_u8(modrm);
+    }
+
+    /// Emits MOV r64, [base_reg] - load 64-bit value from memory into register
+    ///
+    /// # Arguments
+    ///
+    /// * `dst` - Destination register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory
+    pub fn emit_mov_reg64_from_mem(&mut self, dst: u8, base_reg: u8) {
+        assert!(dst < 16, "Invalid destination register: {}", dst);
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+
+        // MOV r64, [base_reg]
+        // Encoding: REX.W [+ REX.R/B] 8B /r
+        //   REX.W = 64-bit operand size
+        //   REX.R = dst >= 8
+        //   REX.B = base_reg >= 8
+        //   8B = MOV r64, r/m64
+        //   ModRM = mod=00 (indirect), reg=dst, r/m=base_reg
+
+        let mut rex = 0x48; // REX.W
+        if dst >= 8 {
+            rex |= 0x04; // REX.R
+        }
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+
+        // MOV opcode
+        self.emit_u8(0x8B);
+
+        // ModRM byte: mod=00 (memory indirect), reg=dst, r/m=base_reg
+        let modrm = 0x00 | ((dst & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emits MOV [base_reg], src - store 64-bit value from register to memory
+    ///
+    /// # Arguments
+    ///
+    /// * `base_reg` - Base register number (0-15) pointing to memory destination
+    /// * `src` - Source register number (0-15)
+    pub fn emit_mov_mem_from_reg64(&mut self, base_reg: u8, src: u8) {
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+        assert!(src < 16, "Invalid source register: {}", src);
+
+        // MOV [base_reg], src
+        // Encoding: REX.W [+ REX.R/B] 89 /r
+        //   REX.W = 64-bit operand size
+        //   REX.R = src >= 8
+        //   REX.B = base_reg >= 8
+        //   89 = MOV r/m64, r64
+        //   ModRM = mod=00 (indirect), reg=src, r/m=base_reg
+
+        let mut rex = 0x48; // REX.W
+        if src >= 8 {
+            rex |= 0x04; // REX.R
+        }
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+
+        // MOV opcode
+        self.emit_u8(0x89);
+
+        // ModRM byte: mod=00 (memory indirect), reg=src, r/m=base_reg
+        let modrm = 0x00 | ((src & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emits MOV dst, [base_reg + offset] - load 64-bit value from memory with offset
+    pub fn emit_mov_reg64_from_mem_offset(&mut self, dst: u8, base_reg: u8, offset: i32) {
+        assert!(dst < 16, "Invalid destination register: {}", dst);
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+
+        // MOV r64, [base_reg + disp32]
+        // Encoding: REX.W [+ REX.R/B] 8B /r disp32
+
+        let mut rex = 0x48; // REX.W
+        if dst >= 8 {
+            rex |= 0x04; // REX.R
+        }
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+
+        // MOV opcode
+        self.emit_u8(0x8B);
+
+        // ModRM byte: mod=10 (disp32), reg=dst, r/m=base_reg
+        // Note: RSP (4) and R12 require SIB byte, RBP (5) and R13 have special encoding
+        let modrm = 0x80 | ((dst & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+
+        // SIB byte needed if base_reg is RSP (4) or R12
+        if (base_reg & 7) == 4 {
+            // SIB: scale=00, index=100 (none), base=RSP/R12
+            self.emit_u8(0x24);
+        }
+
+        // 32-bit displacement
+        self.emit_u32(offset as u32);
+    }
+
+    /// Emits MOV [base_reg + offset], src - store 64-bit value to memory with offset
+    pub fn emit_mov_mem_offset_from_reg64(&mut self, base_reg: u8, offset: i32, src: u8) {
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+        assert!(src < 16, "Invalid source register: {}", src);
+
+        // MOV [base_reg + disp32], src
+        // Encoding: REX.W [+ REX.R/B] 89 /r disp32
+
+        let mut rex = 0x48; // REX.W
+        if src >= 8 {
+            rex |= 0x04; // REX.R
+        }
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+
+        // MOV opcode
+        self.emit_u8(0x89);
+
+        // ModRM byte: mod=10 (disp32), reg=src, r/m=base_reg
+        let modrm = 0x80 | ((src & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+
+        // SIB byte needed if base_reg is RSP (4) or R12
+        if (base_reg & 7) == 4 {
+            self.emit_u8(0x24);
+        }
+
+        // 32-bit displacement
+        self.emit_u32(offset as u32);
+    }
+
+    /// Emits: MOV qword [base_reg], sign-extended imm32
+    pub fn emit_mov_mem64_imm32(&mut self, base_reg: u8, imm: i32) {
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+
+        // MOV qword [base_reg], imm32  (REX.W = 64-bit operand)
+        // Encoding: REX.W [+ REX.B] C7 /0 id
+        let mut rex = 0x48u8; // REX.W
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+        self.emit_u8(0xC7);
+        // ModRM: mod=00, reg=0 (/0), r/m=base_reg
+        let modrm = 0x00 | (base_reg & 7);
+        self.emit_u8(modrm);
+        self.emit_u32(imm as u32);
+    }
+
+    /// Emits: ADD dword [base_reg], imm8 (sign-extended)
+    pub fn emit_add_mem_imm8(&mut self, base_reg: u8, imm: i8) {
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+
+        // ADD [base_reg], imm8  (no REX.W = 32-bit operand)
+        // Encoding: [REX] 83 /0 ib
+        if base_reg >= 8 {
+            self.emit_u8(0x41); // REX.B
+        }
+        self.emit_u8(0x83);
+        // ModRM: mod=00, reg=0 (/0 = ADD), r/m=base_reg
+        let modrm = 0x00 | (base_reg & 7);
+        self.emit_u8(modrm);
+        self.emit_u8(imm as u8);
+    }
+
+    /// Emits: MOV dword [base_reg], imm32
+    ///
+    /// Stores a 32-bit immediate value to memory pointed to by base_reg.
+    pub fn emit_mov_mem_imm32(&mut self, base_reg: u8, imm: u32) {
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+
+        // MOV [base_reg], imm32  (no REX.W = 32-bit operand)
+        // Encoding: [REX] C7 /0 id
+        if base_reg >= 8 {
+            self.emit_u8(0x41); // REX.B
+        }
+        self.emit_u8(0xC7);
+        // ModRM: mod=00, reg=0 (/0), r/m=base_reg
+        let modrm = 0x00 | (base_reg & 7);
+        self.emit_u8(modrm);
+        self.emit_u32(imm);
     }
 
     /// Emits code to move an indirect memory operand into a 64-bit register
@@ -285,6 +482,290 @@ impl Assembler {
         self.emit_u8(modrm);
     }
 
+    /// Emit MOVSS xmm, [base_reg] - Move Scalar Single
+    ///
+    /// # Arguments
+    ///
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15)
+    pub fn emit_movss_xmm_from_reg(&mut self, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // MOVSS xmm, [reg]
+        // Encoding: F3 [REX] 0F 10 /r
+        //   F3       = REPE prefix (for SSE scalar single)
+        //   REX      = REX.B if base_reg >= 8, REX.R if xmm_reg >= 8
+        //   0F 10    = MOVSS opcode
+        //   ModRM    = mod=00 (indirect), reg=xmm_reg, r/m=base_reg
+
+        const PREFIX_REPE: u8 = 0xF3;
+        const MOVSS_OPCODE_1: u8 = 0x0F;
+        const MOVSS_OPCODE_2: u8 = 0x10;
+
+        // Emit REPE prefix
+        self.emit_u8(PREFIX_REPE);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(MOVSS_OPCODE_1);
+        self.emit_u8(MOVSS_OPCODE_2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit COMISD xmm, [base_reg] - Compare scalar double and set EFLAGS
+    ///
+    /// # Arguments
+    ///
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory operand
+    pub fn emit_comisd_xmm_from_reg(&mut self, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // COMISD xmm, [reg]
+        // Encoding: 66 [REX] 0F 2F /r
+        //   66       = Operand size prefix (for SSE2 packed double)
+        //   REX      = REX.B if base_reg >= 8, REX.R if xmm_reg >= 8
+        //   0F 2F    = COMISD opcode
+        //   ModRM    = mod=00 (indirect), reg=xmm_reg, r/m=base_reg
+
+        const PREFIX_OPSIZE: u8 = 0x66;
+        const COMISD_OPCODE_1: u8 = 0x0F;
+        const COMISD_OPCODE_2: u8 = 0x2F;
+
+        // Emit operand size prefix
+        self.emit_u8(PREFIX_OPSIZE);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(COMISD_OPCODE_1);
+        self.emit_u8(COMISD_OPCODE_2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit MOVDQA xmm, [base_reg] - Move Aligned Packed Integer
+    ///
+    /// # Arguments
+    ///
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory operand
+    pub fn emit_movdqa_xmm_from_reg(&mut self, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // MOVDQA xmm, [reg]
+        // Encoding: 66 [REX] 0F 6F /r
+        //   66       = Operand size prefix
+        //   REX      = REX.B if base_reg >= 8, REX.R if xmm_reg >= 8
+        //   0F 6F    = MOVDQA opcode
+        //   ModRM    = mod=00 (indirect), reg=xmm_reg, r/m=base_reg
+
+        const PREFIX_OPSIZE: u8 = 0x66;
+        const MOVDQA_OPCODE_1: u8 = 0x0F;
+        const MOVDQA_OPCODE_2: u8 = 0x6F;
+
+        // Emit operand size prefix
+        self.emit_u8(PREFIX_OPSIZE);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(MOVDQA_OPCODE_1);
+        self.emit_u8(MOVDQA_OPCODE_2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit MOVAPS xmm, [base_reg]
+    /// Encoding: [REX] 0F 28 /r (no prefix)
+    pub fn emit_movaps_xmm_from_reg(&mut self, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16 && base_reg < 16);
+
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04;
+            }
+            if base_reg >= 8 {
+                rex |= 0x01;
+            }
+            self.emit_u8(rex);
+        }
+
+        self.emit_u8(0x0F);
+        self.emit_u8(0x28);
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit a generic SSE2 instruction with 66 prefix: xmm, [base_reg]
+    /// Used for PADDD, PSUBD, PXOR, etc.
+    ///
+    /// # Arguments
+    ///
+    /// * `opcode2` - The second byte of the opcode (first is always 0F)
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory operand
+    pub fn emit_sse2_66_xmm_from_reg(&mut self, opcode2: u8, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // Encoding: 66 [REX] 0F <opcode2> /r
+        const PREFIX_OPSIZE: u8 = 0x66;
+        const OPCODE_1: u8 = 0x0F;
+
+        // Emit operand size prefix
+        self.emit_u8(PREFIX_OPSIZE);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(OPCODE_1);
+        self.emit_u8(opcode2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit a generic SSE2 instruction with F2 prefix: xmm, [base_reg]
+    /// Used for ADDSD, SUBSD, MULSD, DIVSD, etc.
+    ///
+    /// # Arguments
+    ///
+    /// * `opcode2` - The second byte of the opcode (first is always 0F)
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory operand
+    pub fn emit_sse2_f2_xmm_from_reg(&mut self, opcode2: u8, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // Encoding: F2 [REX] 0F <opcode2> /r
+        const PREFIX_F2: u8 = 0xF2;
+        const OPCODE_1: u8 = 0x0F;
+
+        // Emit F2 prefix
+        self.emit_u8(PREFIX_F2);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(OPCODE_1);
+        self.emit_u8(opcode2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
+    /// Emit a generic SSE instruction with F3 prefix: xmm, [base_reg]
+    /// Used for ADDSS, SUBSS, MULSS, DIVSS, etc.
+    ///
+    /// # Arguments
+    ///
+    /// * `opcode2` - The second byte of the opcode (first is always 0F)
+    /// * `xmm_reg` - XMM register number (0-15)
+    /// * `base_reg` - Base register number (0-15) pointing to memory operand
+    pub fn emit_sse_f3_xmm_from_reg(&mut self, opcode2: u8, xmm_reg: u8, base_reg: u8) {
+        assert!(xmm_reg < 16, "Invalid XMM register number: {}", xmm_reg);
+        assert!(base_reg < 16, "Invalid base register number: {}", base_reg);
+
+        // Encoding: F3 [REX] 0F <opcode2> /r
+        const PREFIX_F3: u8 = 0xF3;
+        const OPCODE_1: u8 = 0x0F;
+
+        // Emit F3 prefix
+        self.emit_u8(PREFIX_F3);
+
+        // Emit REX prefix if needed
+        let need_rex = base_reg >= 8 || xmm_reg >= 8;
+        if need_rex {
+            let mut rex = 0x40;
+            if xmm_reg >= 8 {
+                rex |= 0x04; // REX.R
+            }
+            if base_reg >= 8 {
+                rex |= 0x01; // REX.B
+            }
+            self.emit_u8(rex);
+        }
+
+        // Emit opcode
+        self.emit_u8(OPCODE_1);
+        self.emit_u8(opcode2);
+
+        // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
+        let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(modrm);
+    }
+
     /// Emit raw bytes
     pub fn emit_bytes(&mut self, bytes: &[u8]) {
         unsafe {
@@ -302,7 +783,7 @@ impl Assembler {
         }
     }
 
-    fn emit_u32(&mut self, value: u32) {
+    pub fn emit_u32(&mut self, value: u32) {
         unsafe {
             std::ptr::write(self.text_ptr as *mut u32, value);
             self.text_ptr = self.text_ptr.add(4);

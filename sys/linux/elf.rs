@@ -32,6 +32,7 @@ impl Display for Arch {
 /// A segment of the ELF file.
 pub struct Segment {
     pub addr: u64,
+    pub vaddr: u64,
     pub size: u64,
     pub fileoff: u64,
     pub filesize: u64,
@@ -92,6 +93,7 @@ fn parse_elf(file: MappedFile) -> Result<ElfFile> {
 
             segments.push(Segment {
                 addr: addr_aligned,
+                vaddr,
                 size: size,
                 fileoff: fileoff_aligned,
                 filesize: ph.p_filesz,
@@ -147,6 +149,23 @@ fn load_segments(elf: &ElfFile) {
         };
         if data == libc::MAP_FAILED {
             panic!("Failed to map segment: {}", std::io::Error::last_os_error());
+        }
+
+        // Zero-fill the BSS region: the portion of the segment beyond the
+        // file data (p_filesz < p_memsz). The mmap above maps file data into
+        // the entire region, but bytes beyond p_filesz must be zero.
+        let bss_start = segment.vaddr + segment.filesize;
+        let bss_end = segment.addr + segment.size;
+        if bss_start < bss_end {
+            debug!(
+                "Zeroing BSS region 0x{:016x}..0x{:016x} ({} bytes)",
+                bss_start,
+                bss_end,
+                bss_end - bss_start
+            );
+            unsafe {
+                std::ptr::write_bytes(bss_start as *mut u8, 0, (bss_end - bss_start) as usize);
+            }
         }
     }
 }

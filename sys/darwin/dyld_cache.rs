@@ -128,11 +128,12 @@ fn discover_shared_cache_symbols() -> HashMap<String, u64> {
 
         // Parse exports from this library
         if let Some(exports) = parse_shared_cache_exports(header_addr, slide)
-            && !exports.is_empty() {
-                debug!("Found {} exports in {}", exports.len(), name);
-                // Add to our combined symbol table
-                all_exports.extend(exports);
-            }
+            && !exports.is_empty()
+        {
+            debug!("Found {} exports in {}", exports.len(), name);
+            // Add to our combined symbol table
+            all_exports.extend(exports);
+        }
     }
 
     // Resolve re-exports: __REEXPORT__<name>__FROM__<target>
@@ -148,24 +149,25 @@ fn discover_shared_cache_symbols() -> HashMap<String, u64> {
         all_exports.remove(&key);
         // Parse: __REEXPORT__<name>__FROM__<target>
         if let Some(rest) = key.strip_prefix(reexport_prefix)
-            && let Some(sep_pos) = rest.find(reexport_separator) {
-                let symbol_name = &rest[..sep_pos];
-                let target_name = &rest[sep_pos + reexport_separator.len()..];
+            && let Some(sep_pos) = rest.find(reexport_separator)
+        {
+            let symbol_name = &rest[..sep_pos];
+            let target_name = &rest[sep_pos + reexport_separator.len()..];
 
-                // Look up the target symbol
-                if let Some(&addr) = all_exports.get(target_name) {
-                    debug!(
-                        "Resolved re-export {} -> {} at 0x{:x}",
-                        symbol_name, target_name, addr
-                    );
-                    all_exports.insert(symbol_name.to_string(), addr);
-                } else {
-                    debug!(
-                        "Re-export {} -> {} (target not found, may be in another library)",
-                        symbol_name, target_name
-                    );
-                }
+            // Look up the target symbol
+            if let Some(&addr) = all_exports.get(target_name) {
+                debug!(
+                    "Resolved re-export {} -> {} at 0x{:x}",
+                    symbol_name, target_name, addr
+                );
+                all_exports.insert(symbol_name.to_string(), addr);
+            } else {
+                debug!(
+                    "Re-export {} -> {} (target not found, may be in another library)",
+                    symbol_name, target_name
+                );
             }
+        }
     }
 
     debug!(

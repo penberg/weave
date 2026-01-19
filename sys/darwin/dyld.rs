@@ -241,32 +241,33 @@ pub fn dlsym_impl(handle: *mut libc::c_void, symbol: *const libc::c_char) -> *mu
     // Look up in our loaded libraries
     let libs = LOADED_LIBRARIES.lock().unwrap();
     if let Some(ref loaded) = *libs
-        && let Some(lib) = loaded.libraries.get(&handle_addr) {
-            // Try exact match first
-            if let Some(&addr) = lib.exports.get(symbol_str) {
-                debug!(
-                    "weave_dlsym: {} -> 0x{:x} (from {})",
-                    symbol_str, addr, lib.path
-                );
-                return addr as *mut libc::c_void;
-            }
-
-            // On macOS, C symbols have a leading underscore in the binary
-            // Try with underscore prefix
-            let mangled = format!("_{}", symbol_str);
-            if let Some(&addr) = lib.exports.get(&mangled) {
-                debug!(
-                    "weave_dlsym: {} (as {}) -> 0x{:x} (from {})",
-                    symbol_str, mangled, addr, lib.path
-                );
-                return addr as *mut libc::c_void;
-            }
-
+        && let Some(lib) = loaded.libraries.get(&handle_addr)
+    {
+        // Try exact match first
+        if let Some(&addr) = lib.exports.get(symbol_str) {
             debug!(
-                "weave_dlsym: {} not found in {} exports",
-                symbol_str, lib.path
+                "weave_dlsym: {} -> 0x{:x} (from {})",
+                symbol_str, addr, lib.path
             );
+            return addr as *mut libc::c_void;
         }
+
+        // On macOS, C symbols have a leading underscore in the binary
+        // Try with underscore prefix
+        let mangled = format!("_{}", symbol_str);
+        if let Some(&addr) = lib.exports.get(&mangled) {
+            debug!(
+                "weave_dlsym: {} (as {}) -> 0x{:x} (from {})",
+                symbol_str, mangled, addr, lib.path
+            );
+            return addr as *mut libc::c_void;
+        }
+
+        debug!(
+            "weave_dlsym: {} not found in {} exports",
+            symbol_str, lib.path
+        );
+    }
 
     // Fall back to platform dlsym for system libraries
     debug!(
@@ -287,15 +288,16 @@ pub fn dlclose_impl(handle: *mut libc::c_void) -> libc::c_int {
     // Check if this is a Weave-loaded library
     let mut libs = LOADED_LIBRARIES.lock().unwrap();
     if let Some(ref mut loaded) = *libs
-        && loaded.libraries.remove(&handle_addr).is_some() {
-            debug!(
-                "weave_dlclose: successfully closed Weave library at 0x{:x}",
-                handle_addr
-            );
-            // Note: We don't actually unmap the memory since other code might still reference it
-            // This is a simplification - a full implementation would track references
-            return 0;
-        }
+        && loaded.libraries.remove(&handle_addr).is_some()
+    {
+        debug!(
+            "weave_dlclose: successfully closed Weave library at 0x{:x}",
+            handle_addr
+        );
+        // Note: We don't actually unmap the memory since other code might still reference it
+        // This is a simplification - a full implementation would track references
+        return 0;
+    }
 
     // Not a Weave library, pass to platform dlclose
     debug!("weave_dlclose: not a Weave library, passing to platform");
@@ -2058,18 +2060,19 @@ fn resolve_symbol(symbol_name: &str, dylib_name: Option<&str>) -> Result<u64, Bi
 
     // 3. If from a shared cache library, look up in shared cache
     if let Some(lib) = dylib_name
-        && lib.contains("libSystem") {
-            // Symbol from libSystem - must be resolved from shared cache
-            if let Some(addr) = super::dyld_cache::lookup_shared_cache_symbol(symbol_name) {
-                debug!("Resolved {} from shared cache at 0x{:x}", symbol_name, addr);
-                return Ok(addr);
-            }
-            // Not found in shared cache - this is an error
-            return Err(BindingError::UnresolvedSymbol(format!(
-                "{} (from {})",
-                symbol_name, lib
-            )));
+        && lib.contains("libSystem")
+    {
+        // Symbol from libSystem - must be resolved from shared cache
+        if let Some(addr) = super::dyld_cache::lookup_shared_cache_symbol(symbol_name) {
+            debug!("Resolved {} from shared cache at 0x{:x}", symbol_name, addr);
+            return Ok(addr);
         }
+        // Not found in shared cache - this is an error
+        return Err(BindingError::UnresolvedSymbol(format!(
+            "{} (from {})",
+            symbol_name, lib
+        )));
+    }
 
     // 4. Unknown symbol - error (no dlsym fallback)
     Err(BindingError::UnresolvedSymbol(symbol_name.to_string()))

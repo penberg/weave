@@ -98,6 +98,14 @@ impl DynamicLinker {
 
         debug!("Loading shared library: {}", name);
 
+        // Skip the dynamic linker/interpreter — Weave implements its own loader
+        // so the system ld-linux is not needed. It appears as DT_NEEDED in some
+        // toolchains (e.g., Rust/rustc).
+        if name.starts_with("ld-linux") {
+            debug!("Skipping dynamic linker dependency: {}", name);
+            return Ok(());
+        }
+
         // Intercept libc.so.6 and provide our own implementation
         // We need to intercept this to replace non-deterministic functions like rand(), time(), etc.
         if name == "libc.so.6" {
@@ -172,7 +180,36 @@ impl DynamicLinker {
         self.symbols
             .insert("puts".to_string(), libc::puts as *const () as u64);
         self.symbols
+            .insert("putchar".to_string(), libc::putchar as *const () as u64);
+        self.symbols
             .insert("printf".to_string(), libc::printf as *const () as u64);
+        self.symbols
+            .insert("write".to_string(), libc::write as *const () as u64);
+        self.symbols
+            .insert("sprintf".to_string(), libc::sprintf as *const () as u64);
+        self.symbols
+            .insert("snprintf".to_string(), libc::snprintf as *const () as u64);
+        // Some libc functions are not exported by Rust libc crate, use dlsym
+        unsafe {
+            let libc_handle = libc::dlopen(std::ptr::null(), libc::RTLD_NOW);
+            if !libc_handle.is_null() {
+                for name in &["vsprintf", "vsnprintf", "_setjmp", "longjmp", "siglongjmp"] {
+                    let sym = std::ffi::CString::new(*name).unwrap();
+                    let addr = libc::dlsym(libc_handle, sym.as_ptr());
+                    if !addr.is_null() {
+                        self.symbols.insert(name.to_string(), addr as u64);
+                    }
+                }
+            }
+        }
+        self.symbols
+            .insert("memset".to_string(), libc::memset as *const () as u64);
+        self.symbols
+            .insert("strlen".to_string(), libc::strlen as *const () as u64);
+
+        // Register other libc functions needed by tests
+        self.symbols
+            .insert("qsort".to_string(), libc::qsort as *const () as u64);
 
         // Register deterministic replacements for non-deterministic functions
         self.symbols.insert(
@@ -187,6 +224,11 @@ impl DynamicLinker {
             "time".to_string(),
             crate::libc::time::weave_time as *const () as u64,
         );
+
+        // Register exit function - this allows guest code to call exit() which
+        // will properly terminate the process.
+        self.symbols
+            .insert("exit".to_string(), libc::exit as *const () as u64);
 
         debug!("Registered built-in libc symbols");
     }

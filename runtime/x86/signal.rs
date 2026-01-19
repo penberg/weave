@@ -1,5 +1,7 @@
+use crate::runtime::{self, x86::translate::translate_block};
 use libc::{c_int, siginfo_t};
 use std::process::exit;
+use tracing::trace;
 
 /// # Safety
 ///
@@ -14,11 +16,46 @@ pub unsafe extern "C" fn signal_handler(
     context: *mut libc::c_void,
 ) {
     unsafe {
+        let ctx = context as *mut libc::ucontext_t;
+        let mctx = &mut (*ctx).uc_mcontext;
+        let pc = mctx.gregs[libc::REG_RIP as usize] as u64;
+
+        // Check if this is a callback from native code to guest code.
+        // This happens when native library functions (like qsort) call function
+        // pointers that point to guest code. Since guest code is mapped without
+        // PROT_EXEC, this causes SIGSEGV. We translate the guest code on demand
+        // and resume execution at the translated address.
+        if sig == libc::SIGSEGV {
+            if let Some(exec_ctx) = try_get_execution_context() {
+                let is_guest = pc >= exec_ctx.text_start && pc < exec_ctx.text_end;
+                if is_guest {
+                    trace!(
+                        "Signal handler: translating callback at guest 0x{:016x}",
+                        pc
+                    );
+
+                    match translate_block(exec_ctx, pc, exec_ctx.text_end, false) {
+                        Ok(block) => {
+                            let translated_addr = block.text_start().add(8) as u64;
+                            trace!(
+                                "Signal handler: resuming at translated 0x{:016x}",
+                                translated_addr
+                            );
+                            mctx.gregs[libc::REG_RIP as usize] = translated_addr as i64;
+                            return;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to translate callback at 0x{:016x}: {}", pc, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fatal error - print diagnostics and exit
         eprintln!("A fatal error has been detected:");
         eprintln!("{} ({}) at {:p}", signal_name(sig), sig, (*info).si_addr());
 
-        let ctx = context as *mut libc::ucontext_t;
-        let mctx = &(*ctx).uc_mcontext;
         eprintln!(
             "rip={:p}, rsp={:p}, rbp={:p}",
             mctx.gregs[libc::REG_RIP as usize] as *const u8,
@@ -53,6 +90,12 @@ pub unsafe extern "C" fn signal_handler(
         );
         exit(1);
     }
+}
+
+/// Try to get the execution context. Returns None if not available.
+/// This is safe to call from a signal handler on the same thread.
+fn try_get_execution_context() -> Option<&'static mut runtime::ExecutionContext> {
+    runtime::try_get_current_context()
 }
 
 fn signal_name(sig: c_int) -> &'static str {

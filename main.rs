@@ -53,7 +53,7 @@ fn main() {
 fn register_signal_handlers() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = signal_handler as usize;
+        sa.sa_sigaction = signal_handler as *const () as usize;
         sa.sa_flags = libc::SA_SIGINFO;
 
         libc::sigaction(SIGSEGV, &sa, std::ptr::null_mut());

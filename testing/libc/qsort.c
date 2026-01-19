@@ -1,26 +1,4 @@
 // CHECK: Before sort: 5 2 8 1 9 3 7 4 6
-// CHECK: compare: 5 vs 9
-// CHECK: compare: 9 vs 6
-// CHECK: compare: 5 vs 6
-// CHECK: compare: 2 vs 6
-// CHECK: compare: 8 vs 6
-// CHECK: compare: 5 vs 6
-// CHECK: compare: 1 vs 6
-// CHECK: compare: 9 vs 6
-// CHECK: compare: 4 vs 6
-// CHECK: compare: 3 vs 6
-// CHECK: compare: 7 vs 6
-// CHECK: compare: 7 vs 6
-// CHECK: compare: 7 vs 9
-// CHECK: compare: 9 vs 8
-// CHECK: compare: 7 vs 8
-// CHECK: compare: 3 vs 2
-// CHECK: compare: 3 vs 5
-// CHECK: compare: 5 vs 1
-// CHECK: compare: 3 vs 1
-// CHECK: compare: 2 vs 1
-// CHECK: compare: 5 vs 4
-// CHECK: compare: 3 vs 4
 // CHECK: After sort: 1 2 3 4 5 6 7 8 9
 // CHECK: PASS: array is sorted
 /*
@@ -40,7 +18,6 @@
 int compare_ints(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
-    printf("compare: %d vs %d\n", ia, ib);
     return ia - ib;
 }
 

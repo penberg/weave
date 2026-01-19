@@ -14,5 +14,6 @@ pub mod elf;
 pub mod glibc;
 pub mod kernel;
 pub mod ld_linux;
+pub mod syscall;
 
 pub use kernel::{Task, TaskBuilder, execve, get_current_task, set_current_task};

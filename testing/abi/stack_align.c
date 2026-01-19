@@ -25,7 +25,13 @@ __attribute__((noinline))
 uintptr_t get_stack_address(void) {
     uintptr_t sp;
     /* Read actual stack pointer register */
+#if defined(__aarch64__)
     __asm__ __volatile__ ("mov %0, sp" : "=r" (sp));
+#elif defined(__x86_64__)
+    __asm__ __volatile__ ("movq %%rsp, %0" : "=r" (sp));
+#else
+#error "Unsupported architecture"
+#endif
     return sp;
 }
 

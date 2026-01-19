@@ -1,4 +1,4 @@
-name: Darwin
+name: CI
 
 on:
   push:
@@ -8,10 +8,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   build-and-test:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -22,4 +26,5 @@ jobs:
         run: cargo build
 
       - name: Run tests
+        timeout-minutes: 5
         run: make test

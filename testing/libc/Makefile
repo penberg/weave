@@ -9,7 +9,7 @@ TESTS += math
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie
-CFLAGS = -fPIE
+CFLAGS = -fPIE -fno-stack-protector
 
 all: $(TESTS)
 
@@ -21,6 +21,9 @@ all: $(TESTS)
 
 %: %.c
 	@gcc $(CFLAGS) $< $(LDFLAGS) -o $@ 2>/dev/null
+
+math: math.c
+	@gcc $(CFLAGS) $< $(LDFLAGS) -lm -o $@
 
 test: $(TESTS)
 	@for test in $(TESTS); do \

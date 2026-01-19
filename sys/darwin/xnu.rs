@@ -102,15 +102,14 @@ impl Task {
         // Set up guest stack with argc/argv
         // Allocate a stack region in guest address space
         let stack_size: usize = 8 * 1024 * 1024; // 8MB stack
-        let stack_base: u64 = 0x200000000; // Stack base address in guest space
 
-        // Map the stack
+        // Map the stack - let the kernel choose an available address to avoid conflicts
         let stack_ptr = unsafe {
             libc::mmap(
-                stack_base as *mut libc::c_void,
+                std::ptr::null_mut(),
                 stack_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
                 0,
             )
@@ -118,6 +117,7 @@ impl Task {
         if stack_ptr == libc::MAP_FAILED {
             panic!("Failed to allocate guest stack");
         }
+        let stack_base = stack_ptr as u64;
         debug!(
             "Allocated guest stack at 0x{:x}, size {}",
             stack_base, stack_size

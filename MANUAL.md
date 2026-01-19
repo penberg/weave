@@ -88,3 +88,28 @@ If you encounter a feature that isn't supported, check [COMPAT.md](COMPAT.md) fo
 * System calls
 * libc functions
 * Architecture-specific instructions
+
+## Appendix: Internals
+
+### Guest Address Space Layout (Darwin/arm64)
+
+Weave loads guest programs into a dedicated address space separate from the supervisor. The memory layout is organized as follows:
+
+| Address Range | Size | Usage |
+|---------------|------|-------|
+| (dynamic) | 8 MB | Guest stack (grows down) |
+| `0x200000000` | varies | Main executable (Mach-O base) |
+| `0x400000000+` | 4 GB each | Shared libraries |
+| `0x7FFF00000000` | ~4 GB | Shared cache (system libraries) |
+
+The stack is dynamically allocated by the kernel to avoid address conflicts with ASLR. Libraries are loaded with 4 GB spacing to accommodate large binaries and leave room for heap allocations within each library's address range.
+
+### Guest Address Space Layout (Linux/x86_64)
+
+| Address Range | Size | Usage |
+|---------------|------|-------|
+| `0x200000000` | varies | ELF executable base |
+
+### Code Cache
+
+Translated code blocks are stored in a code cache. On x86_64, the code cache starts at `0x200000000`.

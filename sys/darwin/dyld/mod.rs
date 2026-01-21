@@ -5,7 +5,10 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tracing::{debug, error, trace, warn};
 
-use super::macho::*;
+pub mod cache;
+pub mod macho;
+
+use macho::*;
 
 // Thread-local variable (TLV) support
 // TLV section type flags from mach-o/loader.h
@@ -1559,7 +1562,7 @@ impl std::error::Error for BindingError {}
 static STACK_CHK_GUARD: u64 = 0x00000000deadbeef;
 
 // External libc symbols
-// Note: Math functions are resolved from shared cache for binary translation (see dyld_cache.rs)
+// Note: Math functions are resolved from shared cache for binary translation (see cache.rs)
 unsafe extern "C" {
     static __stderrp: *mut libc::FILE;
     static __stdoutp: *mut libc::FILE;
@@ -1880,7 +1883,7 @@ fn resolve_symbol(symbol_name: &str, dylib_name: Option<&str>) -> Result<u64, Bi
     if let Some(lib) = dylib_name
         && lib.contains("libSystem") {
             // Symbol from libSystem - must be resolved from shared cache
-            if let Some(addr) = super::dyld_cache::lookup_shared_cache_symbol(symbol_name) {
+            if let Some(addr) = cache::lookup_shared_cache_symbol(symbol_name) {
                 debug!("Resolved {} from shared cache at 0x{:x}", symbol_name, addr);
                 return Ok(addr);
             }

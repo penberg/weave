@@ -6,6 +6,7 @@ use thiserror::Error;
 use tracing::{debug, error, trace, warn};
 
 pub mod cache;
+pub mod exports;
 pub mod macho;
 
 use macho::*;
@@ -415,17 +416,17 @@ fn load_segments_at_base(macho: &MachO, base_address: u64) {
 
 /// Extract exported symbols from a Mach-O library by parsing the exports trie
 fn extract_exports(macho: &MachO, base_address: u64) -> HashMap<String, u64> {
-    let mut exports = HashMap::new();
     let dyld_info = macho.parse_dyld_info();
 
     if dyld_info.exports_trie.is_empty() {
         debug!("No exports trie found");
-        return exports;
+        return HashMap::new();
     }
 
     // Symbol offsets in the trie are relative to the original image base (0).
     // We add base_address directly to get the final address.
-    parse_exports_trie(&dyld_info.exports_trie, base_address, &mut exports);
+    // Note: We ignore re-exports here as they're only needed for shared cache resolution.
+    let (exports, _re_exports) = exports::parse_exports_trie(&dyld_info.exports_trie, base_address);
 
     debug!("Extracted {} exports from trie", exports.len());
     for (name, addr) in &exports {
@@ -433,126 +434,6 @@ fn extract_exports(macho: &MachO, base_address: u64) -> HashMap<String, u64> {
     }
 
     exports
-}
-
-/// Parse the exports trie and populate the exports map
-/// `base_address` is added to symbol offsets to get final addresses
-fn parse_exports_trie(trie: &[u8], base_address: u64, exports: &mut HashMap<String, u64>) {
-    if trie.is_empty() {
-        return;
-    }
-
-    // Start at the root node with empty prefix
-    let mut stack: Vec<(usize, String)> = vec![(0, String::new())];
-
-    while let Some((node_offset, current_symbol)) = stack.pop() {
-        if node_offset >= trie.len() {
-            continue;
-        }
-
-        let mut pos = node_offset;
-
-        // Read terminal info size
-        let (terminal_size, bytes_read) = match read_uleb128(trie, pos) {
-            Ok(result) => result,
-            Err(_) => continue,
-        };
-        pos += bytes_read;
-
-        // If this is a terminal node, extract the symbol info
-        if terminal_size > 0 {
-            let terminal_start = pos;
-
-            // Read flags
-            let (flags, flags_bytes) = match read_uleb128(trie, pos) {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
-            pos += flags_bytes;
-
-            // Check for re-export or stub flags
-            const EXPORT_SYMBOL_FLAGS_REEXPORT: u64 = 0x08;
-            const EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER: u64 = 0x10;
-
-            if (flags & EXPORT_SYMBOL_FLAGS_REEXPORT) != 0 {
-                // Re-exported symbol - skip ordinal and imported name
-                // Read ordinal
-                let (_, ordinal_bytes) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                pos += ordinal_bytes;
-                // Skip imported name (null-terminated string)
-                while pos < trie.len() && trie[pos] != 0 {
-                    pos += 1;
-                }
-                // Note: no need to advance pos past null - it's reassigned below
-            } else if (flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER) != 0 {
-                // Stub and resolver - read stub offset and resolver offset
-                let (stub_offset, stub_bytes) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                pos += stub_bytes;
-                let (_resolver_offset, _) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                // Use stub offset as the symbol address
-                let symbol_addr = stub_offset.wrapping_add(base_address);
-                if !current_symbol.is_empty() {
-                    exports.insert(current_symbol.clone(), symbol_addr);
-                }
-            } else {
-                // Regular export - read symbol offset
-                let (symbol_offset, _) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                let symbol_addr = symbol_offset.wrapping_add(base_address);
-                if !current_symbol.is_empty() {
-                    exports.insert(current_symbol.clone(), symbol_addr);
-                }
-            }
-
-            // Move past terminal info
-            pos = terminal_start + terminal_size as usize;
-        }
-
-        if pos >= trie.len() {
-            continue;
-        }
-
-        // Read number of children
-        let num_children = trie[pos] as usize;
-        pos += 1;
-
-        // Process each child edge
-        for _ in 0..num_children {
-            if pos >= trie.len() {
-                break;
-            }
-
-            // Read edge label (null-terminated string)
-            let label_start = pos;
-            while pos < trie.len() && trie[pos] != 0 {
-                pos += 1;
-            }
-            let label = String::from_utf8_lossy(&trie[label_start..pos]).to_string();
-            pos += 1; // skip null
-
-            // Read child node offset
-            let (child_offset, offset_bytes) = match read_uleb128(trie, pos) {
-                Ok(result) => result,
-                Err(_) => break,
-            };
-            pos += offset_bytes;
-
-            // Push child onto stack with accumulated symbol name
-            let child_symbol = format!("{}{}", current_symbol, label);
-            stack.push((child_offset as usize, child_symbol));
-        }
-    }
 }
 
 /// Find the text segment range for a library
@@ -1898,30 +1779,7 @@ fn resolve_symbol(symbol_name: &str, dylib_name: Option<&str>) -> Result<u64, Bi
     Err(BindingError::UnresolvedSymbol(symbol_name.to_string()))
 }
 
-/// Read a ULEB128 encoded unsigned integer, returns (value, bytes_consumed)
-fn read_uleb128(data: &[u8], start_index: usize) -> Result<(u64, usize), String> {
-    let mut result = 0u64;
-    let mut shift = 0;
-    let mut bytes_consumed = 0;
-
-    while start_index + bytes_consumed < data.len() {
-        let byte = data[start_index + bytes_consumed];
-        bytes_consumed += 1;
-
-        result |= ((byte & 0x7F) as u64) << shift;
-
-        if (byte & 0x80) == 0 {
-            return Ok((result, bytes_consumed));
-        }
-
-        shift += 7;
-        if shift >= 64 {
-            return Err("ULEB128 value too large".to_string());
-        }
-    }
-
-    Err("Unexpected end of data while reading ULEB128".to_string())
-}
+// Use exports::read_uleb128 for ULEB128 decoding
 
 /// Parse dyld rebase info opcodes from LC_DYLD_INFO_ONLY
 fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
@@ -1948,7 +1806,7 @@ fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
             0x20 => {
                 // REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
                 segment_index = immediate;
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((offset, bytes_consumed)) => {
                         segment_offset = offset;
                         i += bytes_consumed;
@@ -1958,7 +1816,7 @@ fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
             }
             0x30 => {
                 // REBASE_OPCODE_ADD_ADDR_ULEB
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((addr_add, bytes_consumed)) => {
                         segment_offset = segment_offset.wrapping_add(addr_add);
                         i += bytes_consumed;
@@ -1983,7 +1841,7 @@ fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
             }
             0x60 => {
                 // REBASE_OPCODE_DO_REBASE_ULEB_TIMES
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((count, bytes_consumed)) => {
                         for _ in 0..count {
                             rebases.push(RebaseEntry {
@@ -2003,7 +1861,7 @@ fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
                     segment_index,
                     segment_offset,
                 });
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((addr_add, bytes_consumed)) => {
                         segment_offset = segment_offset.wrapping_add(addr_add).wrapping_add(8);
                         i += bytes_consumed;
@@ -2013,11 +1871,11 @@ fn parse_dyld_rebase_info(data: &[u8]) -> Result<Vec<RebaseEntry>, String> {
             }
             0x80 => {
                 // REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB
-                let (count, count_bytes) = match read_uleb128(data, i + 1) {
+                let (count, count_bytes) = match exports::read_uleb128(data, i + 1) {
                     Ok(result) => result,
                     Err(_) => return Err("Failed to read ULEB128 count".to_string()),
                 };
-                let (skip, skip_bytes) = match read_uleb128(data, i + 1 + count_bytes) {
+                let (skip, skip_bytes) = match exports::read_uleb128(data, i + 1 + count_bytes) {
                     Ok(result) => result,
                     Err(_) => return Err("Failed to read ULEB128 skip".to_string()),
                 };
@@ -2069,7 +1927,7 @@ fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
             }
             0x20 => {
                 // BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((ordinal, bytes_consumed)) => {
                         lib_ordinal = ordinal as u8;
                         i += bytes_consumed;
@@ -2104,7 +1962,7 @@ fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
             0x70 => {
                 // BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
                 segment_index = immediate;
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((offset, bytes_consumed)) => {
                         segment_offset = offset;
                         i += bytes_consumed;
@@ -2115,7 +1973,7 @@ fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
             0x80 => {
                 // BIND_OPCODE_ADD_ADDR_ULEB
                 // Note: Large unsigned values effectively subtract (wrapping semantics)
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((addr_add, bytes_consumed)) => {
                         segment_offset = segment_offset.wrapping_add(addr_add);
                         i += bytes_consumed;
@@ -2151,7 +2009,7 @@ fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
                         segment_offset,
                     });
                 }
-                match read_uleb128(data, i + 1) {
+                match exports::read_uleb128(data, i + 1) {
                     Ok((addr_add, bytes_consumed)) => {
                         segment_offset = segment_offset.wrapping_add(addr_add);
                         i += bytes_consumed;
@@ -2175,11 +2033,11 @@ fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
             0xC0 => {
                 // BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB
                 // Bind multiple times with skip
-                let (count, count_bytes) = match read_uleb128(data, i + 1) {
+                let (count, count_bytes) = match exports::read_uleb128(data, i + 1) {
                     Ok(result) => result,
                     Err(_) => return Err("Failed to read ULEB128 count".to_string()),
                 };
-                let (skip, skip_bytes) = match read_uleb128(data, i + 1 + count_bytes) {
+                let (skip, skip_bytes) = match exports::read_uleb128(data, i + 1 + count_bytes) {
                     Ok(result) => result,
                     Err(_) => return Err("Failed to read ULEB128 skip".to_string()),
                 };
@@ -2237,7 +2095,7 @@ fn parse_dyld_lazy_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
                 }
                 0x20 => {
                     // BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB
-                    match read_uleb128(data, i + 1) {
+                    match exports::read_uleb128(data, i + 1) {
                         Ok((ordinal, bytes_consumed)) => {
                             lib_ordinal = ordinal as u8;
                             i += bytes_consumed;
@@ -2265,14 +2123,14 @@ fn parse_dyld_lazy_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
                 }
                 0x60 => {
                     // BIND_OPCODE_SET_ADDEND_SLEB
-                    if let Ok((_, bytes_consumed)) = read_uleb128(data, i + 1) {
+                    if let Ok((_, bytes_consumed)) = exports::read_uleb128(data, i + 1) {
                         i += bytes_consumed;
                     }
                 }
                 0x70 => {
                     // BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
                     segment_index = immediate;
-                    match read_uleb128(data, i + 1) {
+                    match exports::read_uleb128(data, i + 1) {
                         Ok((offset, bytes_consumed)) => {
                             segment_offset = offset;
                             i += bytes_consumed;

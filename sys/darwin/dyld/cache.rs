@@ -28,6 +28,7 @@ unsafe extern "C" {
 fn discover_shared_cache_symbols() -> HashMap<String, u64> {
     let count = unsafe { _dyld_image_count() };
     let mut all_exports = HashMap::new();
+    let mut all_re_exports = Vec::new();
 
     debug!(
         "Discovering shared cache libraries ({} images loaded)",
@@ -65,45 +66,31 @@ fn discover_shared_cache_symbols() -> HashMap<String, u64> {
         );
 
         // Parse exports from this library
-        if let Some(exports) = parse_shared_cache_exports(header_addr, slide)
-            && !exports.is_empty() {
-                debug!("Found {} exports in {}", exports.len(), name);
-                // Add to our combined symbol table
-                all_exports.extend(exports);
-            }
+        if let Some((exports, re_exports)) = parse_shared_cache_exports(header_addr, slide)
+            && !exports.is_empty()
+        {
+            debug!("Found {} exports in {}", exports.len(), name);
+            // Add to our combined symbol table
+            all_exports.extend(exports);
+            all_re_exports.extend(re_exports);
+        }
     }
 
-    // Resolve re-exports: __REEXPORT__<name>__FROM__<target>
-    let reexport_prefix = "__REEXPORT__";
-    let reexport_separator = "__FROM__";
-    let reexport_keys: Vec<String> = all_exports
-        .keys()
-        .filter(|k| k.starts_with(reexport_prefix))
-        .cloned()
-        .collect();
-
-    for key in reexport_keys {
-        all_exports.remove(&key);
-        // Parse: __REEXPORT__<name>__FROM__<target>
-        if let Some(rest) = key.strip_prefix(reexport_prefix)
-            && let Some(sep_pos) = rest.find(reexport_separator) {
-                let symbol_name = &rest[..sep_pos];
-                let target_name = &rest[sep_pos + reexport_separator.len()..];
-
-                // Look up the target symbol
-                if let Some(&addr) = all_exports.get(target_name) {
-                    debug!(
-                        "Resolved re-export {} -> {} at 0x{:x}",
-                        symbol_name, target_name, addr
-                    );
-                    all_exports.insert(symbol_name.to_string(), addr);
-                } else {
-                    debug!(
-                        "Re-export {} -> {} (target not found, may be in another library)",
-                        symbol_name, target_name
-                    );
-                }
-            }
+    // Resolve re-exports using the ReExport structs
+    for re_export in all_re_exports {
+        // Look up the target symbol
+        if let Some(&addr) = all_exports.get(&re_export.target_name) {
+            debug!(
+                "Resolved re-export {} -> {} at 0x{:x}",
+                re_export.symbol_name, re_export.target_name, addr
+            );
+            all_exports.insert(re_export.symbol_name, addr);
+        } else {
+            debug!(
+                "Re-export {} -> {} (target not found, may be in another library)",
+                re_export.symbol_name, re_export.target_name
+            );
+        }
     }
 
     debug!(
@@ -113,9 +100,14 @@ fn discover_shared_cache_symbols() -> HashMap<String, u64> {
     all_exports
 }
 
+use super::exports::ReExport;
+
 /// Parse exports from an in-memory Mach-O header (for shared cache images)
-fn parse_shared_cache_exports(header_addr: u64, slide: i64) -> Option<HashMap<String, u64>> {
-    let mut exports = HashMap::new();
+fn parse_shared_cache_exports(
+    header_addr: u64,
+    slide: i64,
+) -> Option<(HashMap<String, u64>, Vec<ReExport>)> {
+    let exports = HashMap::new();
 
     // Read the mach_header_64 at header_addr
     let header = unsafe { std::ptr::read(header_addr as *const mach_header_64) };
@@ -172,7 +164,7 @@ fn parse_shared_cache_exports(header_addr: u64, slide: i64) -> Option<HashMap<St
 
     if exports_trie_size == 0 {
         debug!("No exports trie found in shared cache image");
-        return Some(exports);
+        return Some((exports, Vec::new()));
     }
 
     // In the shared cache, data is accessed via: (linkedit_vmaddr + slide) + (dataoff - linkedit_fileoff)
@@ -200,7 +192,7 @@ fn parse_shared_cache_exports(header_addr: u64, slide: i64) -> Option<HashMap<St
     // Sanity check: if first byte looks like garbage (e.g., > 200 children), skip this trie
     if exports_trie_size > 0 {
         // Read what would be terminal_size
-        if let Ok((terminal_size, term_bytes)) = read_uleb128(trie_data, 0) {
+        if let Ok((terminal_size, term_bytes)) = super::exports::read_uleb128(trie_data, 0) {
             let children_pos = if terminal_size > 0 {
                 term_bytes + terminal_size as usize
             } else {
@@ -218,215 +210,16 @@ fn parse_shared_cache_exports(header_addr: u64, slide: i64) -> Option<HashMap<St
                         "Skipping corrupt trie: num_children={} is unreasonably large",
                         num_children
                     );
-                    return Some(exports);
+                    return Some((exports, Vec::new()));
                 }
             }
         }
     }
 
     // The base address for symbols is the header address (already includes slide)
-    parse_exports_trie(trie_data, header_addr, &mut exports);
+    let (exports, re_exports) = super::exports::parse_exports_trie(trie_data, header_addr);
 
-    Some(exports)
-}
-
-/// Read a ULEB128 encoded unsigned integer, returns (value, bytes_consumed)
-fn read_uleb128(data: &[u8], start_index: usize) -> Result<(u64, usize), &'static str> {
-    let mut result = 0u64;
-    let mut shift = 0;
-    let mut bytes_consumed = 0;
-
-    while start_index + bytes_consumed < data.len() {
-        let byte = data[start_index + bytes_consumed];
-        bytes_consumed += 1;
-
-        result |= ((byte & 0x7F) as u64) << shift;
-
-        if (byte & 0x80) == 0 {
-            return Ok((result, bytes_consumed));
-        }
-
-        shift += 7;
-        if shift >= 64 {
-            return Err("ULEB128 value too large");
-        }
-    }
-
-    Err("Unexpected end of data while reading ULEB128")
-}
-
-/// Parse the exports trie and populate the exports map.
-/// `base_address` is added to symbol offsets to get final addresses.
-fn parse_exports_trie(trie: &[u8], base_address: u64, exports: &mut HashMap<String, u64>) {
-    if trie.is_empty() {
-        return;
-    }
-
-    // Start at the root node with empty prefix
-    let mut stack: Vec<(usize, String)> = vec![(0, String::new())];
-    let mut iterations = 0usize;
-    const MAX_ITERATIONS: usize = 100_000;
-
-    while let Some((node_offset, current_symbol)) = stack.pop() {
-        iterations += 1;
-        if iterations > MAX_ITERATIONS {
-            warn!(
-                "parse_exports_trie: exceeded {} iterations, stack size={}, aborting",
-                MAX_ITERATIONS,
-                stack.len()
-            );
-            break;
-        }
-        if iterations <= 20 {
-            debug!(
-                "  iter {}: node_offset={}, symbol={:?}, stack_size={}",
-                iterations,
-                node_offset,
-                current_symbol,
-                stack.len()
-            );
-        }
-        if node_offset >= trie.len() {
-            continue;
-        }
-
-        let mut pos = node_offset;
-
-        // Read terminal info size
-        let (terminal_size, bytes_read) = match read_uleb128(trie, pos) {
-            Ok(result) => result,
-            Err(_) => continue,
-        };
-        pos += bytes_read;
-
-        // If this is a terminal node, extract the symbol info
-        if terminal_size > 0 {
-            let terminal_start = pos;
-
-            // Read flags
-            let (flags, flags_bytes) = match read_uleb128(trie, pos) {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
-            pos += flags_bytes;
-
-            // Check for re-export or stub flags
-            const EXPORT_SYMBOL_FLAGS_REEXPORT: u64 = 0x08;
-            const EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER: u64 = 0x10;
-
-            if (flags & EXPORT_SYMBOL_FLAGS_REEXPORT) != 0 {
-                // Re-exported symbol - read ordinal and imported name
-                let (_, ordinal_bytes) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                pos += ordinal_bytes;
-                // Read imported name (null-terminated string)
-                let imported_name_start = pos;
-                while pos < trie.len() && trie[pos] != 0 {
-                    pos += 1;
-                }
-                let imported_name = if pos > imported_name_start {
-                    String::from_utf8_lossy(&trie[imported_name_start..pos]).to_string()
-                } else {
-                    // Empty imported name means use the same name as the export
-                    current_symbol.clone()
-                };
-                // Record this re-export for later resolution
-                if !current_symbol.is_empty() && !imported_name.is_empty() {
-                    // Store as a marker - we'll resolve after all symbols are collected
-                    // Use a special prefix to identify re-exports
-                    exports.insert(
-                        format!("__REEXPORT__{}__FROM__{}", current_symbol, imported_name),
-                        0,
-                    );
-                }
-            } else if (flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER) != 0 {
-                // Stub and resolver - read stub offset and resolver offset
-                let (stub_offset, stub_bytes) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                pos += stub_bytes;
-                let (_resolver_offset, _) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                // Use stub offset as the symbol address
-                let symbol_addr = stub_offset.wrapping_add(base_address);
-                if !current_symbol.is_empty() {
-                    exports.insert(current_symbol.clone(), symbol_addr);
-                }
-            } else {
-                // Regular export - read symbol offset
-                let (symbol_offset, _) = match read_uleb128(trie, pos) {
-                    Ok(result) => result,
-                    Err(_) => continue,
-                };
-                let symbol_addr = symbol_offset.wrapping_add(base_address);
-                if !current_symbol.is_empty() {
-                    exports.insert(current_symbol.clone(), symbol_addr);
-                }
-            }
-
-            // Move past terminal info
-            pos = terminal_start + terminal_size as usize;
-        }
-
-        if pos >= trie.len() {
-            continue;
-        }
-
-        // Read number of children
-        let num_children = trie[pos] as usize;
-        pos += 1;
-        if iterations <= 20 {
-            debug!("    num_children={}", num_children);
-        }
-
-        // Sanity check: reasonable tries don't have >100 children per node
-        if num_children > 100 {
-            continue;
-        }
-
-        // Process each child edge
-        for _ in 0..num_children {
-            if pos >= trie.len() {
-                break;
-            }
-
-            // Read edge label (null-terminated string)
-            let label_start = pos;
-            while pos < trie.len() && trie[pos] != 0 {
-                pos += 1;
-            }
-            let label = String::from_utf8_lossy(&trie[label_start..pos]).to_string();
-            pos += 1; // skip null
-
-            // Read child node offset
-            let (child_offset, offset_bytes) = match read_uleb128(trie, pos) {
-                Ok(result) => result,
-                Err(_) => break,
-            };
-            pos += offset_bytes;
-
-            // Skip offset 0 - it would loop back to root (matches Apple's dyld behavior)
-            // Also skip out-of-bounds offsets
-            if child_offset == 0 || child_offset as usize >= trie.len() {
-                continue;
-            }
-
-            // Push child onto stack with accumulated symbol name
-            let child_symbol = format!("{}{}", current_symbol, label);
-            if iterations <= 20 {
-                debug!(
-                    "    pushing child: offset={}, label={:?}",
-                    child_offset, label
-                );
-            }
-            stack.push((child_offset as usize, child_symbol));
-        }
-    }
+    Some((exports, re_exports))
 }
 
 /// Initialize the shared cache symbol registry.

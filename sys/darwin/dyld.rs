@@ -5,6 +5,8 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tracing::{debug, error, trace, warn};
 
+use super::macho::*;
+
 // Thread-local variable (TLV) support
 // TLV section type flags from mach-o/loader.h
 const S_THREAD_LOCAL_REGULAR: u32 = 0x11;
@@ -1103,46 +1105,6 @@ fn apply_chained_rebases(macho: &MachO) {
     );
 }
 
-#[derive(Debug)]
-pub enum MachOFileType {
-    Executable,
-}
-
-const MACHO_MAGIC: u32 = 0xfeedfacf;
-const FAT_MAGIC: u32 = 0xcafebabe;
-const FAT_CIGAM: u32 = 0xbebafeca;
-const MH_PIE: u32 = 0x00200000;
-
-#[repr(C)]
-#[derive(Debug)]
-struct mach_header_64 {
-    magic: u32,
-    cputype: u32,
-    cpusubtype: u32,
-    filetype: u32,
-    ncmds: u32,
-    sizeofcmds: u32,
-    flags: u32,
-    reserved: u32,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-struct fat_header {
-    magic: u32,
-    nfat_arch: u32,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-struct fat_arch {
-    cputype: u32,
-    cpusubtype: u32,
-    offset: u32,
-    size: u32,
-    align: u32,
-}
-
 fn parse_macho(mut file: MappedFile) -> Result<MachO, crate::ObjectFormatError> {
     if file.data.len() < std::mem::size_of::<mach_header_64>() {
         return Err(MachError::NotMachO.into());
@@ -1248,148 +1210,6 @@ fn parse_macho(mut file: MappedFile) -> Result<MachO, crate::ObjectFormatError> 
         fat_offset,
     })
 }
-
-#[derive(Debug)]
-#[repr(C)]
-struct load_command {
-    cmd: u32,
-    cmdsize: u32,
-}
-
-const LC_REQ_DYLD: u32 = 0x80000000;
-
-const LC_SYMTAB: u32 = 0x2;
-const LC_DYSYMTAB: u32 = 0xb;
-const LC_LOAD_DYLIB: u32 = 0xc;
-const LC_LOAD_DYLINKER: u32 = 0xe;
-const LC_SEGMENT_64: u32 = 0x19;
-const LC_UUID: u32 = 0x1b;
-const LC_FUNCTION_STARTS: u32 = 0x26;
-const LC_DATA_IN_CODE: u32 = 0x29;
-const LC_SOURCE_VERSION: u32 = 0x2a;
-const LC_CODE_SIGNATURE: u32 = 0x1d;
-const LC_BUILD_VERSION: u32 = 0x32;
-const LC_DYLD_INFO_ONLY: u32 = 0x22 | LC_REQ_DYLD;
-const LC_MAIN: u32 = 0x28 | LC_REQ_DYLD;
-const LC_DYLD_EXPORTS_TRIE: u32 = 0x33 | LC_REQ_DYLD;
-const LC_DYLD_CHAINED_FIXUPS: u32 = 0x34 | LC_REQ_DYLD;
-
-#[derive(Debug)]
-#[repr(C)]
-struct segment_command_64 {
-    cmd: u32,
-    cmdsize: u32,
-    segname: [u8; 16],
-    vmaddr: u64,
-    vmsize: u64,
-    fileoff: u64,
-    filesize: u64,
-    maxprot: u32,
-    initprot: u32,
-    nsects: u32,
-    flags: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct entry_point_command {
-    cmd: u32,
-    cmdsize: u32,
-    entryoff: u64,
-    stacksize: u64,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct section_64 {
-    sectname: [u8; 16],
-    segname: [u8; 16],
-    addr: u64,
-    size: u64,
-    offset: u32,
-    align: u32,
-    reloff: u32,
-    nreloc: u32,
-    flags: u32,
-    reserved1: u32,
-    reserved2: u32,
-    reserved3: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct dylib_command {
-    cmd: u32,
-    cmdsize: u32,
-    dylib_name_offset: u32,
-    timestamp: u32,
-    current_version: u32,
-    compatibility_version: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct linkedit_data_command {
-    cmd: u32,
-    cmdsize: u32,
-    dataoff: u32,
-    datasize: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct dyld_info_command {
-    cmd: u32,
-    cmdsize: u32,
-    rebase_off: u32,
-    rebase_size: u32,
-    bind_off: u32,
-    bind_size: u32,
-    weak_bind_off: u32,
-    weak_bind_size: u32,
-    lazy_bind_off: u32,
-    lazy_bind_size: u32,
-    export_off: u32,
-    export_size: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct dyld_chained_fixups_header {
-    fixups_version: u32,
-    starts_offset: u32,
-    imports_offset: u32,
-    symbols_offset: u32,
-    imports_count: u32,
-    imports_format: u32,
-    symbols_format: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct dyld_chained_starts_in_image {
-    seg_count: u32,
-    // seg_info_offset array follows - offsets to dyld_chained_starts_in_segment for each segment
-}
-
-#[derive(Debug)]
-#[repr(C)]
-struct dyld_chained_starts_in_segment {
-    size: u32,
-    page_size: u16,
-    pointer_format: u16,
-    segment_offset: u64,
-    max_valid_pointer: u32,
-    page_count: u16,
-    // page_start array follows
-}
-
-// Pointer format constants
-const DYLD_CHAINED_PTR_ARM64E: u16 = 1;
-const DYLD_CHAINED_PTR_64: u16 = 2;
-const DYLD_CHAINED_PTR_64_OFFSET: u16 = 6;
-const DYLD_CHAINED_PTR_ARM64E_USERLAND: u16 = 7;
-const DYLD_CHAINED_PTR_ARM64E_USERLAND24: u16 = 8;
 
 fn parse_load_cmds(
     file: &MappedFile,

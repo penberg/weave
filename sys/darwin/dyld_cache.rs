@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::{debug, warn};
 
+use super::macho::*;
+
 /// Registry for symbols resolved from the dyld shared cache.
 /// Maps symbol name -> address in shared cache (already mapped, will be translated).
 static SHARED_CACHE_SYMBOLS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
@@ -18,70 +20,6 @@ unsafe extern "C" {
     fn _dyld_get_image_header(image_index: u32) -> *const mach_header_64;
     fn _dyld_get_image_name(image_index: u32) -> *const libc::c_char;
     fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
-}
-
-// Mach-O constants and structures (matching those in dyld.rs)
-const MACHO_MAGIC: u32 = 0xfeedfacf;
-const LC_REQ_DYLD: u32 = 0x80000000;
-const LC_SEGMENT_64: u32 = 0x19;
-const LC_DYLD_INFO_ONLY: u32 = 0x22 | LC_REQ_DYLD;
-const LC_DYLD_EXPORTS_TRIE: u32 = 0x33 | LC_REQ_DYLD;
-
-#[repr(C)]
-struct mach_header_64 {
-    magic: u32,
-    cputype: u32,
-    cpusubtype: u32,
-    filetype: u32,
-    ncmds: u32,
-    sizeofcmds: u32,
-    flags: u32,
-    reserved: u32,
-}
-
-#[repr(C)]
-struct load_command {
-    cmd: u32,
-    cmdsize: u32,
-}
-
-#[repr(C)]
-struct segment_command_64 {
-    cmd: u32,
-    cmdsize: u32,
-    segname: [u8; 16],
-    vmaddr: u64,
-    vmsize: u64,
-    fileoff: u64,
-    filesize: u64,
-    maxprot: u32,
-    initprot: u32,
-    nsects: u32,
-    flags: u32,
-}
-
-#[repr(C)]
-struct linkedit_data_command {
-    cmd: u32,
-    cmdsize: u32,
-    dataoff: u32,
-    datasize: u32,
-}
-
-#[repr(C)]
-struct dyld_info_command {
-    cmd: u32,
-    cmdsize: u32,
-    rebase_off: u32,
-    rebase_size: u32,
-    bind_off: u32,
-    bind_size: u32,
-    weak_bind_off: u32,
-    weak_bind_size: u32,
-    lazy_bind_off: u32,
-    lazy_bind_size: u32,
-    export_off: u32,
-    export_size: u32,
 }
 
 /// Discover all shared cache libraries and extract their exports.

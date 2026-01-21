@@ -7,6 +7,11 @@
 Deterministic execution for reproducible debugging—for AI agents and humans.
 </p>
 
+<p align="center">
+  <a title="Build Status" target="_blank" href="https://github.com/penberg/weave/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/penberg/weave/ci.yml?style=flat-square"></a>
+  <a title="MIT" target="_blank" href="https://github.com/penberg/weave/blob/main/LICENSE.md"><img src="http://img.shields.io/badge/license-MIT-orange.svg?style=flat-square"></a>
+</p>
+
 ---
 
 ## 🎯 Overview

@@ -22,10 +22,10 @@ pub fn load_machfile(file: MappedFile) -> Result<MachO, crate::ObjectFormatError
     let macho = MachO::open(file)?;
     let host_arch = crate::probe_host_arch();
     if macho.arch != host_arch {
-        panic!(
-            "cannot run binary for {} architecture on {} host",
-            macho.arch, host_arch
-        );
+        return Err(crate::ObjectFormatError::UnsupportedArch {
+            binary_arch: macho.arch.to_string(),
+            host_arch: host_arch.to_string(),
+        });
     }
     load_segments(&macho, 0);
     apply_rebases(&macho, 0);

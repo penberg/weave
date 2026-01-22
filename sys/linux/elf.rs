@@ -56,7 +56,11 @@ pub fn load_elf(file: MappedFile) -> Result<ElfFile> {
 fn parse_elf(file: MappedFile) -> Result<ElfFile> {
     let elf = Elf::parse(file.data).map_err(|e| ObjectFormatError::from(e))?;
     if elf.header.e_machine != goblin::elf::header::EM_X86_64 {
-        return Err(ObjectFormatError::UnsupportedArch.into());
+        return Err(ObjectFormatError::UnsupportedArch {
+            binary_arch: format!("ELF machine type {}", elf.header.e_machine),
+            host_arch: "x86_64".to_string(),
+        }
+        .into());
     }
     let arch = Arch::X86_64;
     if elf.header.e_type != goblin::elf::header::ET_DYN {

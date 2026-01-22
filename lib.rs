@@ -56,8 +56,8 @@ pub enum ObjectFormatError {
     #[error("mach-o error: {0}")]
     MachError(#[from] sys::darwin::dyld::MachError),
 
-    #[error("unsupported architecture")]
-    UnsupportedArch,
+    #[error("cannot run binary for {binary_arch} architecture on {host_arch} host")]
+    UnsupportedArch { binary_arch: String, host_arch: String },
 
     #[error("text segment is missing")]
     MissingTextSegment,

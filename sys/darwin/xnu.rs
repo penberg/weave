@@ -92,7 +92,7 @@ impl Task {
         self.context.text_end = text_end;
 
         // Initialize shared cache symbol discovery
-        super::dyld_cache::init_shared_cache_symbols();
+        super::dyld::cache::init_shared_cache_symbols();
 
         // Note: We intentionally do NOT extend text bounds to include shared cache.
         // Shared cache functions (printf, malloc, etc.) should be executed as native

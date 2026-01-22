@@ -27,11 +27,11 @@ pub fn load_machfile(file: MappedFile) -> Result<MachO, crate::ObjectFormatError
             macho.arch, host_arch
         );
     }
-    load_segments(&macho);
-    apply_rebases(&macho);
-    chained::apply_chained_rebases(&macho);
+    load_segments(&macho, 0);
+    apply_rebases(&macho, 0);
+    chained::apply_chained_rebases(&macho, 0);
     process_dyld_info(&macho);
-    match bind_symbols(&macho) {
+    match bind_symbols(&macho, 0) {
         Ok(()) => (),
         Err(BindingError::UnresolvedSymbol(symbol)) => {
             eprintln!("FATAL ERROR: Cannot resolve symbol '{}'", symbol);
@@ -43,7 +43,7 @@ pub fn load_machfile(file: MappedFile) -> Result<MachO, crate::ObjectFormatError
         }
     };
     // Initialize TLV (Thread Local Variable) descriptors
-    tlv::initialize_tlv_descriptors(&macho);
+    tlv::initialize_tlv_descriptors(&macho, 0);
     Ok(macho)
 }
 
@@ -193,18 +193,25 @@ impl MachO {
     }
 }
 
-fn load_segments(macho: &MachO) {
+/// Map Mach-O segments into memory.
+///
+/// The slide parameter adjusts where segments are loaded relative to their
+/// stored vmaddr. For the main executable, slide=0 since vmaddrs already
+/// have MACHO_BASE_ADDRESS baked in. For dlopen'd libraries, slide is
+/// computed to place the library at a different base address.
+pub(crate) fn load_segments(macho: &MachO, slide: i64) {
     let fd = macho.file.fd;
     for segment in &macho.segments {
-        debug!(
-            "Loading segment {} at 0x{:016x} (vmsize={} filesize={}) prot={:x}",
-            segment.segname, segment.vmaddr, segment.vmsize, segment.filesize, segment.prot
-        );
-
         // Skip __PAGEZERO - it's a guard region that shouldn't be mapped
         if segment.segname == "__PAGEZERO" {
             continue;
         }
+
+        let target_addr = (segment.vmaddr as i64 + slide) as u64;
+        debug!(
+            "Loading segment {} at 0x{:016x} (vmsize={} filesize={}) prot={:x}",
+            segment.segname, target_addr, segment.vmsize, segment.filesize, segment.prot
+        );
 
         let prot = segment.prot & !libc::PROT_EXEC;
 
@@ -216,7 +223,7 @@ fn load_segments(macho: &MachO) {
             // Map zeroed anonymous memory for the entire segment
             let anon_data = unsafe {
                 libc::mmap(
-                    segment.vmaddr as *mut libc::c_void,
+                    target_addr as *mut libc::c_void,
                     segment.vmsize as usize,
                     prot,
                     libc::MAP_PRIVATE | libc::MAP_FIXED | libc::MAP_ANON,
@@ -237,7 +244,7 @@ fn load_segments(macho: &MachO) {
                 let file_offset = segment.fileoff as usize + macho.fat_offset;
                 let file_data = unsafe {
                     libc::mmap(
-                        segment.vmaddr as *mut libc::c_void,
+                        target_addr as *mut libc::c_void,
                         segment.filesize as usize,
                         prot,
                         libc::MAP_PRIVATE | libc::MAP_FIXED,
@@ -260,7 +267,7 @@ fn load_segments(macho: &MachO) {
             let file_offset = segment.fileoff as usize + macho.fat_offset;
             let data = unsafe {
                 libc::mmap(
-                    segment.vmaddr as *mut libc::c_void,
+                    target_addr as *mut libc::c_void,
                     segment.vmsize as usize,
                     prot,
                     flags,
@@ -275,8 +282,11 @@ fn load_segments(macho: &MachO) {
     }
 }
 
-/// Apply rebase fixups to adjust internal pointers for relocation
-fn apply_rebases(macho: &MachO) {
+/// Apply rebase fixups to adjust internal pointers for relocation.
+///
+/// The segment_slide parameter adjusts where we read/write rebase entries.
+/// For main executable, segment_slide=0. For dlopen'd libraries, it's non-zero.
+pub(crate) fn apply_rebases(macho: &MachO, segment_slide: i64) {
     let dyld_info = macho.parse_dyld_info();
 
     if dyld_info.rebases.is_empty() {
@@ -285,10 +295,8 @@ fn apply_rebases(macho: &MachO) {
 
     debug!("Applying {} rebase fixups", dyld_info.rebases.len());
 
-    // The slide is the difference between where we loaded and where the binary expected to be
-    // Segments are stored with MACHO_BASE_ADDRESS already added, so slide is 0
-    // But internal pointers in the file don't have MACHO_BASE_ADDRESS, so we add it
-    let slide = MACHO_BASE_ADDRESS;
+    // Internal pointers in the file don't have MACHO_BASE_ADDRESS, so we add it
+    let pointer_slide = MACHO_BASE_ADDRESS;
 
     for rebase in &dyld_info.rebases {
         let segment = match macho.segments.get(rebase.segment_index as usize) {
@@ -299,13 +307,13 @@ fn apply_rebases(macho: &MachO) {
             }
         };
 
-        let entry_addr = segment.vmaddr + rebase.segment_offset;
+        let entry_addr = (segment.vmaddr as i64 + segment_slide) as u64 + rebase.segment_offset;
 
         // Read the current pointer value, add the slide, and write it back
         unsafe {
             let ptr = entry_addr as *mut u64;
             let old_value = *ptr;
-            let new_value = old_value.wrapping_add(slide);
+            let new_value = old_value.wrapping_add(pointer_slide);
             *ptr = new_value;
             trace!(
                 "Rebase at 0x{:x}: 0x{:x} -> 0x{:x}",
@@ -315,9 +323,9 @@ fn apply_rebases(macho: &MachO) {
     }
 
     debug!(
-        "Applied {} rebase fixups with slide 0x{:x}",
+        "Applied {} rebase fixups with pointer_slide 0x{:x}",
         dyld_info.rebases.len(),
-        slide
+        pointer_slide
     );
 }
 
@@ -753,9 +761,11 @@ fn resolve_symbol(symbol_name: &str, dylib_name: Option<&str>) -> Result<u64, Bi
     Err(BindingError::UnresolvedSymbol(symbol_name.to_string()))
 }
 
-/// Symbol binding at load time (like real dyld)
-/// Returns a set of host function addresses that were bound
-pub fn bind_symbols(macho: &MachO) -> Result<(), BindingError> {
+/// Symbol binding at load time.
+///
+/// The segment_slide parameter adjusts segment addresses for dlopen'd libraries.
+/// For main executable, segment_slide=0. For dlopen'd libraries, it's non-zero.
+pub(crate) fn bind_symbols(macho: &MachO, segment_slide: i64) -> Result<(), BindingError> {
     let dyld_info = macho.parse_dyld_info();
 
     if dyld_info.fixups.is_empty() {
@@ -773,7 +783,7 @@ pub fn bind_symbols(macho: &MachO) -> Result<(), BindingError> {
         // Look up segment by index to compute absolute address
         let segment = macho.segments.get(fixup.segment_index as usize);
         let entry_addr = match segment {
-            Some(seg) => seg.vmaddr + fixup.segment_offset,
+            Some(seg) => (seg.vmaddr as i64 + segment_slide) as u64 + fixup.segment_offset,
             None => {
                 warn!(
                     "Invalid segment index {} for symbol {}",
@@ -823,94 +833,6 @@ pub fn bind_symbols(macho: &MachO) -> Result<(), BindingError> {
     }
 
     // Flush instruction cache for the patched range
-    if let (Some(min), Some(max)) = (min_addr, max_addr) {
-        let size = (max - min) as usize;
-        crate::runtime::flush_icache_range(min as *const u8, size);
-        debug!(
-            "Flushed icache for binding region: 0x{:016x} ({} bytes)",
-            min, size
-        );
-    }
-
-    Ok(())
-}
-
-/// Symbol binding for dynamically loaded libraries.
-/// Takes the actual base address where the library is loaded.
-pub(crate) fn bind_symbols_at_base(macho: &MachO, base_address: u64) -> Result<(), BindingError> {
-    let dyld_info = macho.parse_dyld_info();
-
-    if dyld_info.fixups.is_empty() {
-        trace!("No symbol fixups found, skipping symbol binding");
-        return Ok(());
-    }
-
-    // Calculate slide: segments have MACHO_BASE_ADDRESS baked in, but library is at base_address
-    // We need to find the preferred base from segment vmaddrs
-    let preferred_base = macho
-        .segments
-        .iter()
-        .filter(|s| s.segname != "__PAGEZERO")
-        .map(|s| s.vmaddr)
-        .min()
-        .unwrap_or(MACHO_BASE_ADDRESS);
-    let slide = base_address.wrapping_sub(preferred_base);
-
-    debug!(
-        "Binding {} symbols at load time (slide=0x{:x})",
-        dyld_info.fixups.len(),
-        slide
-    );
-
-    let mut min_addr: Option<u64> = None;
-    let mut max_addr: Option<u64> = None;
-
-    for fixup in &dyld_info.fixups {
-        // Look up segment by index and apply slide
-        let segment = macho.segments.get(fixup.segment_index as usize);
-        let entry_addr = match segment {
-            Some(seg) => seg.vmaddr.wrapping_add(slide) + fixup.segment_offset,
-            None => {
-                warn!(
-                    "Invalid segment index {} for symbol {}",
-                    fixup.segment_index, fixup.symbol_name
-                );
-                continue;
-            }
-        };
-
-        // Get the dylib name for this symbol (lib_ordinal is 1-based, 0 means self)
-        let dylib_name = if fixup.lib_ordinal == 0 {
-            None // Self reference
-        } else {
-            dyld_info
-                .dylibs
-                .get((fixup.lib_ordinal - 1) as usize)
-                .map(|d| d.name.as_str())
-        };
-
-        match resolve_symbol(&fixup.symbol_name, dylib_name) {
-            Ok(symbol_addr) => {
-                debug!(
-                    "Binding {} -> 0x{:016x} at 0x{:x}",
-                    fixup.symbol_name, symbol_addr, entry_addr
-                );
-
-                unsafe {
-                    *(entry_addr as *mut u64) = symbol_addr;
-                }
-
-                min_addr = Some(min_addr.map_or(entry_addr, |m| m.min(entry_addr)));
-                max_addr = Some(max_addr.map_or(entry_addr + 8, |m| m.max(entry_addr + 8)));
-            }
-            Err(BindingError::UnresolvedSymbol(_)) => {
-                error!("FATAL: Unresolved symbol: {}", fixup.symbol_name);
-                return Err(BindingError::UnresolvedSymbol(fixup.symbol_name.clone()));
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
     if let (Some(min), Some(max)) = (min_addr, max_addr) {
         let size = (max - min) as usize;
         crate::runtime::flush_icache_range(min as *const u8, size);

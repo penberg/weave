@@ -5,11 +5,11 @@
 //! space and prepare it for binary translation.
 
 use super::exports;
-use super::MachO;
+use super::{chained, tlv, MachO, MACHO_BASE_ADDRESS};
 use crate::mmap::MappedFile;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 /// Registry of dynamically loaded libraries
 static LOADED_LIBRARIES: Mutex<Option<LoadedLibraries>> = Mutex::new(None);
@@ -92,23 +92,34 @@ pub fn dlopen_impl(path: *const libc::c_char, _flags: libc::c_int) -> *mut libc:
         path_str, base_address
     );
 
-    // Load segments at the new base address
-    load_segments_at_base(&macho, base_address);
+    // Calculate slide: segments have MACHO_BASE_ADDRESS baked in, but we want base_address
+    let preferred_base = macho
+        .segments
+        .iter()
+        .filter(|s| s.segname != "__PAGEZERO")
+        .map(|s| s.vmaddr)
+        .min()
+        .unwrap_or(MACHO_BASE_ADDRESS);
+    let slide = base_address as i64 - preferred_base as i64;
 
-    // Bind symbols for this library (using the actual base address)
-    if let Err(e) = super::bind_symbols_at_base(&macho, base_address) {
+    // Load and link the library using the same functions as load_machfile
+    super::load_segments(&macho, slide);
+    super::apply_rebases(&macho, slide);
+    chained::apply_chained_rebases(&macho, slide);
+    if let Err(e) = super::bind_symbols(&macho, slide) {
         warn!(
             "weave_dlopen: failed to bind symbols for {}: {}",
             path_str, e
         );
         // Continue anyway - some symbols might still work
     }
+    tlv::initialize_tlv_descriptors(&macho, slide);
 
     // Extract exported symbols from the library
-    let exports = extract_exports(&macho, base_address);
+    let exports = extract_exports(&macho, slide);
 
     // Find text segment for translation tracking
-    let (text_start, text_end) = find_text_range(&macho, base_address);
+    let (text_start, text_end) = find_text_range(&macho, slide);
 
     // Register the library
     {
@@ -258,106 +269,8 @@ pub fn dlerror_impl() -> *mut libc::c_char {
     std::ptr::null_mut()
 }
 
-/// Load segments at a specific base address (for dynamic libraries)
-fn load_segments_at_base(macho: &MachO, base_address: u64) {
-    let fd = macho.file.fd;
-
-    // Calculate the slide (difference between requested base and library's preferred base)
-    let preferred_base = macho
-        .segments
-        .iter()
-        .filter(|s| s.segname != "__PAGEZERO")
-        .map(|s| s.vmaddr)
-        .min()
-        .unwrap_or(0);
-    let slide = base_address.wrapping_sub(preferred_base);
-
-    for segment in &macho.segments {
-        // Skip __PAGEZERO - it's a guard region
-        if segment.segname == "__PAGEZERO" {
-            continue;
-        }
-
-        let target_addr = segment.vmaddr.wrapping_add(slide);
-        debug!(
-            "Loading segment {} at 0x{:016x} (vmsize={} filesize={}) prot={:x}",
-            segment.segname, target_addr, segment.vmsize, segment.filesize, segment.prot
-        );
-
-        let prot = segment.prot & !libc::PROT_EXEC;
-
-        // Handle zerofill (BSS): when vmsize > filesize, the extra bytes must be zeroed.
-        if segment.vmsize > segment.filesize {
-            // Map zeroed anonymous memory for the entire segment
-            let anon_data = unsafe {
-                libc::mmap(
-                    target_addr as *mut libc::c_void,
-                    segment.vmsize as usize,
-                    prot,
-                    libc::MAP_PRIVATE | libc::MAP_FIXED | libc::MAP_ANON,
-                    -1,
-                    0,
-                )
-            };
-            if anon_data == libc::MAP_FAILED {
-                error!(
-                    "Failed to map anonymous memory for segment at 0x{:x}: {}",
-                    target_addr,
-                    std::io::Error::last_os_error()
-                );
-                continue;
-            }
-
-            // If there's file data, map it over the beginning
-            if segment.filesize > 0 {
-                let file_offset = segment.fileoff as usize + macho.fat_offset;
-                let file_data = unsafe {
-                    libc::mmap(
-                        target_addr as *mut libc::c_void,
-                        segment.filesize as usize,
-                        prot,
-                        libc::MAP_PRIVATE | libc::MAP_FIXED,
-                        fd,
-                        file_offset as libc::off_t,
-                    )
-                };
-                if file_data == libc::MAP_FAILED {
-                    error!(
-                        "Failed to map file data for segment at 0x{:x}: {}",
-                        target_addr,
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
-        } else {
-            // No zerofill - just map the file data directly
-            let flags = libc::MAP_PRIVATE | libc::MAP_FIXED;
-            // For fat/universal binaries, segment.fileoff is relative to the Mach-O slice,
-            // but the fd refers to the entire fat file, so we need to add fat_offset
-            let file_offset = segment.fileoff as usize + macho.fat_offset;
-            let data = unsafe {
-                libc::mmap(
-                    target_addr as *mut libc::c_void,
-                    segment.vmsize as usize,
-                    prot,
-                    flags,
-                    fd,
-                    file_offset as libc::off_t,
-                )
-            };
-            if data == libc::MAP_FAILED {
-                error!(
-                    "Failed to map segment at 0x{:x}: {}",
-                    target_addr,
-                    std::io::Error::last_os_error()
-                );
-            }
-        }
-    }
-}
-
 /// Extract exported symbols from a Mach-O library by parsing the exports trie
-fn extract_exports(macho: &MachO, base_address: u64) -> HashMap<String, u64> {
+fn extract_exports(macho: &MachO, slide: i64) -> HashMap<String, u64> {
     let dyld_info = macho.parse_dyld_info();
 
     if dyld_info.exports_trie.is_empty() {
@@ -365,10 +278,19 @@ fn extract_exports(macho: &MachO, base_address: u64) -> HashMap<String, u64> {
         return HashMap::new();
     }
 
-    // Symbol offsets in the trie are relative to the original image base (0).
-    // We add base_address directly to get the final address.
+    // Symbol offsets in the trie are relative to the preferred load address.
+    // Apply slide to get the actual address.
+    let preferred_base = macho
+        .segments
+        .iter()
+        .filter(|s| s.segname != "__PAGEZERO")
+        .map(|s| s.vmaddr)
+        .min()
+        .unwrap_or(MACHO_BASE_ADDRESS);
+    let actual_base = (preferred_base as i64 + slide) as u64;
+
     // Note: We ignore re-exports here as they're only needed for shared cache resolution.
-    let (exports, _re_exports) = exports::parse_exports_trie(&dyld_info.exports_trie, base_address);
+    let (exports, _re_exports) = exports::parse_exports_trie(&dyld_info.exports_trie, actual_base);
 
     debug!("Extracted {} exports from trie", exports.len());
     for (name, addr) in &exports {
@@ -379,19 +301,10 @@ fn extract_exports(macho: &MachO, base_address: u64) -> HashMap<String, u64> {
 }
 
 /// Find the text segment range for a library
-fn find_text_range(macho: &MachO, base_address: u64) -> (u64, u64) {
-    let preferred_base = macho
-        .segments
-        .iter()
-        .filter(|s| s.segname != "__PAGEZERO")
-        .map(|s| s.vmaddr)
-        .min()
-        .unwrap_or(0);
-    let slide = base_address.wrapping_sub(preferred_base);
-
+fn find_text_range(macho: &MachO, slide: i64) -> (u64, u64) {
     for segment in &macho.segments {
         if segment.segname == "__TEXT" {
-            let start = segment.vmaddr.wrapping_add(slide);
+            let start = (segment.vmaddr as i64 + slide) as u64;
             let end = start + segment.vmsize;
             return (start, end);
         }

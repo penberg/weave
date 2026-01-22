@@ -96,7 +96,9 @@ pub fn parse_chained_fixups(data: &[u8], segments: &[Segment]) -> Result<Vec<Cha
 /// This walks the pointer chains in __DATA segments and fixes up rebase pointers.
 /// Each page contains a linked list of pointers, where each pointer encodes
 /// both its target value and the delta to the next pointer in the chain.
-pub fn apply_chained_rebases(macho: &MachO) {
+///
+/// The segment_slide parameter adjusts segment addresses for dlopen'd libraries.
+pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
     let dyld_info = macho.parse_dyld_info();
     let data = &dyld_info.chained_fixups_data;
 
@@ -171,12 +173,12 @@ pub fn apply_chained_rebases(macho: &MachO) {
         let page_size = seg_starts.page_size as u64;
         let page_count = seg_starts.page_count as usize;
 
-        // Get the segment's base address
+        // Get the segment's base address (apply slide for dlopen'd libraries)
         let segment = match macho.segments.get(seg_idx) {
             Some(seg) => seg,
             None => continue,
         };
-        let seg_base = segment.vmaddr;
+        let seg_base = (segment.vmaddr as i64 + segment_slide) as u64;
 
         trace!(
             "Segment {} ({}): format={}, page_size={}, page_count={}, base=0x{:x}, segment_offset=0x{:x}",

@@ -150,7 +150,9 @@ pub unsafe extern "C" fn weave_tlv_get_addr_impl(descriptor: *mut TlvDescriptor)
 
 /// Initialize TLV descriptors for the loaded Mach-O.
 /// This replaces the thunk and key fields in all TLV descriptors.
-pub fn initialize_tlv_descriptors(macho: &MachO) {
+///
+/// The segment_slide parameter adjusts section addresses for dlopen'd libraries.
+pub fn initialize_tlv_descriptors(macho: &MachO, segment_slide: i64) {
     // Find TLV-related sections
     let mut thread_vars_addr = None;
     let mut thread_vars_size = 0u64;
@@ -161,38 +163,39 @@ pub fn initialize_tlv_descriptors(macho: &MachO) {
     for section in &macho.sections {
         let flags = get_section_flags(macho, &section.sectname, &section.segname);
         let section_type = flags & SECTION_TYPE_MASK;
+        let section_addr = (section.addr as i64 + segment_slide) as u64;
 
         match section_type {
             S_THREAD_LOCAL_VARIABLES => {
                 // __thread_vars section - contains TLV descriptors
-                thread_vars_addr = Some(section.addr);
+                thread_vars_addr = Some(section_addr);
                 thread_vars_size = section.size;
                 debug!(
                     "Found __thread_vars at 0x{:x}, size {}",
-                    section.addr, section.size
+                    section_addr, section.size
                 );
             }
             S_THREAD_LOCAL_REGULAR => {
                 // __thread_data - initialized TLV template
                 if template_data_start.is_none() {
-                    template_data_start = Some(section.addr);
+                    template_data_start = Some(section_addr);
                 }
                 template_data_size += section.size as usize;
                 template_total_size += section.size as usize;
                 debug!(
                     "Found __thread_data at 0x{:x}, size {} (initialized)",
-                    section.addr, section.size
+                    section_addr, section.size
                 );
             }
             S_THREAD_LOCAL_ZEROFILL => {
                 // __thread_bss - zero-initialized TLV template
                 if template_data_start.is_none() {
-                    template_data_start = Some(section.addr);
+                    template_data_start = Some(section_addr);
                 }
                 template_total_size += section.size as usize;
                 debug!(
                     "Found __thread_bss at 0x{:x}, size {} (zero-fill)",
-                    section.addr, section.size
+                    section_addr, section.size
                 );
             }
             _ => {}

@@ -31,17 +31,7 @@ pub fn load_machfile(file: MappedFile) -> Result<MachO, crate::ObjectFormatError
     apply_rebases(&macho, 0);
     chained::apply_chained_rebases(&macho, 0);
     process_dyld_info(&macho);
-    match bind_symbols(&macho, 0) {
-        Ok(()) => (),
-        Err(BindingError::UnresolvedSymbol(symbol)) => {
-            eprintln!("FATAL ERROR: Cannot resolve symbol '{}'", symbol);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("FATAL ERROR: Symbol binding failed: {}", e);
-            std::process::exit(1);
-        }
-    };
+    bind_symbols(&macho, 0)?;
     // Initialize TLV (Thread Local Variable) descriptors
     tlv::initialize_tlv_descriptors(&macho, 0);
     Ok(macho)

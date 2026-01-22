@@ -66,6 +66,10 @@ pub enum ObjectFormatError {
         "executable is not PIE (Position Independent Executable) - only PIE executables are supported"
     )]
     NotPIE,
+
+    #[cfg(target_os = "macos")]
+    #[error("symbol binding failed: {0}")]
+    BindingError(#[from] sys::darwin::dyld::BindingError),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

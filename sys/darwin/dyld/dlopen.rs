@@ -40,7 +40,7 @@ struct LoadedLibrary {
 /// binary translation.
 ///
 /// Returns a handle (the library's base address) or null on failure.
-pub fn dlopen_impl(path: *const libc::c_char, _flags: libc::c_int) -> *mut libc::c_void {
+pub fn dlopen(path: *const libc::c_char, _flags: libc::c_int) -> *mut libc::c_void {
     if path.is_null() {
         return std::ptr::null_mut();
     }
@@ -171,7 +171,7 @@ pub fn dlopen_impl(path: *const libc::c_char, _flags: libc::c_int) -> *mut libc:
 }
 
 /// Look up a symbol in a dynamically loaded library.
-pub fn dlsym_impl(handle: *mut libc::c_void, symbol: *const libc::c_char) -> *mut libc::c_void {
+pub fn dlsym(handle: *mut libc::c_void, symbol: *const libc::c_char) -> *mut libc::c_void {
     if symbol.is_null() {
         return std::ptr::null_mut();
     }
@@ -236,8 +236,8 @@ pub fn dlsym_impl(handle: *mut libc::c_void, symbol: *const libc::c_char) -> *mu
 
 /// Close a dynamically loaded library.
 ///
-/// This handles libraries loaded via dlopen_impl.
-pub fn dlclose_impl(handle: *mut libc::c_void) -> libc::c_int {
+/// This handles libraries loaded via dlopen.
+pub fn dlclose(handle: *mut libc::c_void) -> libc::c_int {
     let handle_addr = handle as u64;
 
     debug!("weave_dlclose: closing handle {:p}", handle);
@@ -264,7 +264,7 @@ pub fn dlclose_impl(handle: *mut libc::c_void) -> libc::c_int {
 /// Return error message for last dlopen/dlsym/dlclose error.
 ///
 /// For now, we just return NULL (no error) since we don't track errors.
-pub fn dlerror_impl() -> *mut libc::c_char {
+pub fn dlerror() -> *mut libc::c_char {
     // TODO: Track and return actual error messages
     std::ptr::null_mut()
 }

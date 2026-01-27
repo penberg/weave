@@ -12,7 +12,7 @@ pub mod macho;
 pub mod tlv;
 
 pub use bind::RebaseEntry;
-pub use dlopen::{dlclose_impl, dlerror_impl, dlopen_impl, dlsym_impl};
+pub use dlopen::{dlclose, dlerror, dlopen, dlsym};
 
 use macho::*;
 

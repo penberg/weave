@@ -28,10 +28,22 @@ Modern software contains non-deterministic bugs that appear randomly and disappe
 
 ## 🧑‍💻 Getting Started
 
-You use the `weave` program to run your programs as follows:
+Run your program with `weave` to execute it deterministically:
 
 ```console
-weave <program>
+> weave /bin/date
+Sun Mar 10 01:34:50 EET 2041
+> weave /bin/date
+Sun Mar 10 01:34:50 EET 2041   # Same output, every time!
+```
+
+If you want a different, but reproducible timeline, use the `--seed` flag:
+
+```console
+> weave --seed 12345 /bin/date
+Fri Jun  2 22:33:25 EEST 2000
+> weave --seed 12345 /bin/date
+Fri Jun  2 22:33:25 EEST 2000   # Same seed = same result
 ```
 
 ## 💡 Motivation

@@ -1,9 +1,8 @@
 use crate::runtime::{
     self,
-    x86::{CpuState, TIME_TICK, translate::translate_block},
+    x86::{CpuState, translate::translate_block},
 };
 use core::arch::global_asm;
-use std::sync::atomic::Ordering;
 use tracing::trace;
 
 /// Handles control flow transitions between translated code blocks
@@ -17,10 +16,33 @@ use tracing::trace;
 /// The function assumes a valid execution context has been set up via
 /// `set_current_context()` and accesses it without additional checks.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dispatcher(target_addr: usize, _stack_ptr: *mut u8) -> usize {
+pub unsafe extern "C" fn debug_saved_registers(saved_rsi: u64, saved_rdi: u64) {
+    trace!(
+        "DEBUG: Saved RSI=0x{:016x}, Saved RDI=0x{:016x}",
+        saved_rsi, saved_rdi
+    );
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn debug_pre_jump(rsi: u64, rdi: u64, rbx: u64, target: u64) {
+    trace!(
+        "PRE-JUMP: RSI=0x{:016x}, RDI=0x{:016x}, RBX=0x{:016x}, target=0x{:016x}",
+        rsi, rdi, rbx, target
+    );
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dispatcher(
+    target_addr: usize,
+    _stack_ptr: *mut u8,
+    saved_rsi: u64,
+    saved_rbx: u64,
+    saved_rdi: u64,
+    saved_r11: u64,
+) -> usize {
     let ctx = runtime::get_current_context();
 
-    TIME_TICK.fetch_add(1, Ordering::Release);
+    crate::runtime::time::tick();
 
     let target_addr = target_addr as u64;
 
@@ -33,18 +55,14 @@ pub unsafe extern "C" fn dispatcher(target_addr: usize, _stack_ptr: *mut u8) -> 
 
     let is_guest = target_addr >= ctx.text_start && target_addr < ctx.text_end;
 
-    // Get the current RDI value from CPU state for debugging supervisor calls
-    let rdi_value = if !is_guest {
-        ctx.state.regs[crate::runtime::x86::REG_RDI]
-    } else {
-        0
-    };
-
     trace!(
-        "Dispatching to 0x{:016x} ({}) rdi=0x{:016x}",
+        "Dispatching to 0x{:016x} ({}) saved_rdi=0x{:016x} saved_rsi=0x{:016x} saved_rbx=0x{:016x} saved_r11=0x{:016x}",
         target_addr,
         if is_guest { "guest" } else { "supervisor" },
-        rdi_value
+        saved_rdi,
+        saved_rsi,
+        saved_rbx,
+        saved_r11
     );
 
     if is_guest {
@@ -69,12 +87,14 @@ pub unsafe extern "C" fn dispatcher(target_addr: usize, _stack_ptr: *mut u8) -> 
 
         // The return address is on the application stack
         // When we entered the dispatcher, the guest code had already pushed
-        // the return address (for a CALL instruction)
-        // We need to read it from the guest stack and translate it if needed
+        // the return address (for a CALL instruction), then pushed saved_R10,
+        // then the trampoline pushed saved_R15.
+        // Stack layout: [..., return_addr, saved_R10, saved_R15] <- _stack_ptr
+        // We need to read from _stack_ptr + 16 to get return_addr
 
-        // Get the return address from the top of the application stack
-        // _stack_ptr points to the current application RSP
-        let return_addr_ptr = _stack_ptr as *mut u64;
+        // Get the return address from the application stack (above saved R10 and R15)
+        // _stack_ptr points to saved_R15, return_addr is 16 bytes above
+        let return_addr_ptr = unsafe { (_stack_ptr as *mut u64).add(2) };
         let return_addr = unsafe { *return_addr_ptr };
         let is_return_guest = return_addr >= ctx.text_start && return_addr < ctx.text_end;
 

@@ -22,6 +22,9 @@ all: $(TESTS)
 %: %.c
 	@gcc $(CFLAGS) $< $(LDFLAGS) -o $@ 2>/dev/null
 
+math: math.c
+	@gcc $(CFLAGS) $< $(LDFLAGS) -lm -o $@
+
 test: $(TESTS)
 	@for test in $(TESTS); do \
 		src=""; \

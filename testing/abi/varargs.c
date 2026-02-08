@@ -138,7 +138,12 @@ int do_format_int(va_list *ap) {
 __attribute__((noinline))
 void do_format(char *buf, const char *fmt, va_list ap) {
     // Mimic vsprintf: call another function to read va_arg
-    int val = do_format_int(&ap);
+    // Use va_copy because on Linux x86-64 va_list is an array type,
+    // and passing it to a function decays to a pointer - &ap would be wrong type
+    va_list local_ap;
+    va_copy(local_ap, ap);
+    int val = do_format_int(&local_ap);
+    va_end(local_ap);
     // Format manually
     char *p = buf;
     while (*fmt && *fmt != '%') *p++ = *fmt++;

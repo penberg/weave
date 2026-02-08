@@ -5,7 +5,6 @@ pub mod translate;
 
 pub use translate::{TranslatedBlock, translate_block};
 
-use crate::Result;
 use tracing::trace;
 
 pub const X86_MAX_INSN_SIZE: usize = 15;
@@ -23,11 +22,15 @@ pub fn code_cache_hint() -> *mut libc::c_void {
     (CODE_CACHE_BASE + CODE_CACHE_OFFSET) as *mut libc::c_void
 }
 
-/// Start execution of an execution context
-pub fn translate_and_run(
-    ctx: &mut crate::runtime::ExecutionContext,
-    returnable: bool,
-) -> Result<i32> {
+/// Start execution of an execution context - this never returns!
+///
+/// The `returnable` parameter controls the execution mode:
+/// - If true, uses sentinel-based return detection (main's return triggers process exit)
+/// - If false, uses direct execution (never returns)
+///
+/// Note: In both cases, this function never returns to the caller.
+/// The process will exit when main() returns or when exit() is called.
+pub fn translate_and_run(ctx: &mut crate::runtime::ExecutionContext, returnable: bool) -> ! {
     crate::runtime::set_current_context(ctx as *mut crate::runtime::ExecutionContext);
 
     let entry_point = ctx.state.pc;
@@ -39,21 +42,23 @@ pub fn translate_and_run(
 }
 
 /// Translate a basic block and branch directly to it
+///
+/// This function never returns - execution continues in the translated code
+/// until the process exits.
 pub fn translate_and_branch_to(
     ctx: &mut crate::runtime::ExecutionContext,
     address: u64,
     returnable: bool,
-) -> Result<i32> {
-    let block = translate_block(ctx, address, ctx.text_end, returnable)?;
+) -> ! {
+    let block = translate_block(ctx, address, ctx.text_end, returnable).unwrap();
     if ctx.print_code {
         block.print_code();
     }
-    let target_addr = if returnable {
+    if returnable {
         block.execute_returnable(&mut ctx.state)
     } else {
-        block.execute_direct(&mut ctx.state);
-    };
-    Ok(target_addr)
+        block.execute_direct(&mut ctx.state)
+    }
 }
 
 /// Allocates memory for the text segment

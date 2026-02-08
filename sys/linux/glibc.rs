@@ -42,23 +42,28 @@ pub extern "C" fn libc_start_main(
 
     // Set up CPU state for main(argc, argv, envp)
     // x86-64 calling convention: rdi, rsi, rdx for first 3 args
-    task.context.state.regs[7] = argc as u64; // RDI: argc
-    task.context.state.regs[6] = argv as u64; // RSI: argv
-    task.context.state.regs[2] = 0; // RDX: envp (NULL)
+    task.context.state.regs[crate::runtime::x86::REG_RDI] = argc as u64; // RDI: argc
+    task.context.state.regs[crate::runtime::x86::REG_RSI] = argv as u64; // RSI: argv
+    task.context.state.regs[crate::runtime::x86::REG_RDX] = 0; // RDX: envp (NULL)
 
-    // Jump to main() using the JIT
-    let exit_code = crate::runtime::x86::translate_and_branch_to(
+    // Push a sentinel return address (0) onto the guest stack
+    // When main() returns, the dispatcher will see target_addr == 0 and call exit()
+    let rsp = task.context.state.regs[crate::runtime::x86::REG_RSP];
+    let new_rsp = rsp - 8;
+    unsafe {
+        *(new_rsp as *mut u64) = 0; // Sentinel return address
+    }
+    task.context.state.regs[crate::runtime::x86::REG_RSP] = new_rsp;
+
+    debug!("Calling main at 0x{:x} with rsp=0x{:x}", main_addr, new_rsp);
+
+    // Jump to main() using the JIT - this never returns
+    // The dispatcher handles control flow and calls process::exit() when main returns
+    crate::runtime::x86::translate_and_branch_to(
         &mut task.context,
         main_addr,
         true, // returnable - main() will return
     )
-    .unwrap_or_else(|e| {
-        eprintln!("Error executing main: {}", e);
-        1
-    });
-
-    debug!("main() returned with exit code: {}", exit_code);
-    std::process::exit(exit_code);
 }
 
 /// Stub implementation of __gmon_start__

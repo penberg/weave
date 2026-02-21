@@ -10,7 +10,7 @@ TESTS += stack_align
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie
-CFLAGS = -fPIE -O2
+CFLAGS = -fPIE -O2 -fno-stack-protector
 
 all: $(TESTS)
 

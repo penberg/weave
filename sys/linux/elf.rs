@@ -32,6 +32,7 @@ impl Display for Arch {
 /// A segment of the ELF file.
 pub struct Segment {
     pub addr: u64,
+    pub vaddr: u64,
     pub size: u64,
     pub fileoff: u64,
     pub filesize: u64,
@@ -71,7 +72,7 @@ fn parse_elf(file: MappedFile) -> Result<ElfFile> {
 
     let mut segments = Vec::new();
     for ph in &elf.program_headers {
-        if ph.p_type == goblin::elf::program_header::PT_LOAD {
+        if ph.p_type == goblin::elf::program_header::PT_LOAD && ph.p_memsz > 0 {
             let mut prot: libc::c_int = 0;
 
             if ph.p_flags & goblin::elf::program_header::PF_R != 0 {
@@ -92,6 +93,7 @@ fn parse_elf(file: MappedFile) -> Result<ElfFile> {
 
             segments.push(Segment {
                 addr: addr_aligned,
+                vaddr,
                 size: size,
                 fileoff: fileoff_aligned,
                 filesize: ph.p_filesz,
@@ -134,19 +136,59 @@ fn load_segments(elf: &ElfFile) {
 
         // Segment addr and fileoff are already page-aligned from parse_elf()
         let prot = segment.prot & !libc::PROT_EXEC;
-        let flags = libc::MAP_PRIVATE | libc::MAP_FIXED;
-        let data = unsafe {
+        let page_offset = segment.vaddr - segment.addr;
+
+        // First, reserve the full range (including BSS) with an anonymous
+        // mapping. This guarantees zeroed memory for BSS and avoids mapping
+        // file data beyond EOF, which causes EINVAL on some kernels.
+        let reserve = unsafe {
             libc::mmap(
                 segment.addr as *mut libc::c_void,
                 segment.size as usize,
                 prot,
-                flags,
-                fd,
-                segment.fileoff as libc::off_t,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+                -1,
+                0,
             )
         };
-        if data == libc::MAP_FAILED {
-            panic!("Failed to map segment: {}", std::io::Error::last_os_error());
+        if reserve == libc::MAP_FAILED {
+            panic!("Failed to reserve segment: {}", std::io::Error::last_os_error());
+        }
+
+        // Then, overlay the file-backed portion (p_filesz only, not p_memsz).
+        let file_map_size = segment.filesize + page_offset;
+        if file_map_size > 0 {
+            let data = unsafe {
+                libc::mmap(
+                    segment.addr as *mut libc::c_void,
+                    file_map_size as usize,
+                    prot,
+                    libc::MAP_PRIVATE | libc::MAP_FIXED,
+                    fd,
+                    segment.fileoff as libc::off_t,
+                )
+            };
+            if data == libc::MAP_FAILED {
+                panic!("Failed to map segment: {}", std::io::Error::last_os_error());
+            }
+        }
+
+        // Zero-fill the BSS region: the portion of the segment beyond the
+        // file data (p_filesz < p_memsz). The file mmap above maps whole
+        // pages, so file data past p_filesz can bleed into the BSS region
+        // on the last partial page. Re-zero it explicitly.
+        let bss_start = segment.vaddr + segment.filesize;
+        let bss_end = segment.addr + segment.size;
+        if bss_start < bss_end {
+            debug!(
+                "Zeroing BSS region 0x{:016x}..0x{:016x} ({} bytes)",
+                bss_start,
+                bss_end,
+                bss_end - bss_start
+            );
+            unsafe {
+                std::ptr::write_bytes(bss_start as *mut u8, 0, (bss_end - bss_start) as usize);
+            }
         }
     }
 }

@@ -2,7 +2,7 @@ TESTS += math
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie
-CFLAGS = -fPIE -pie
+CFLAGS = -fPIE -pie -fno-stack-protector
 
 all: $(TESTS)
 

@@ -5,6 +5,7 @@ TESTS += branch-indirect
 TESTS += branch-cond
 TESTS += branch-test
 TESTS += branch-pac
+TESTS += ldr-literal
 
 ASFLAGS =
 LDFLAGS =

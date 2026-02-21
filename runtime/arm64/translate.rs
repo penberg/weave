@@ -313,16 +313,72 @@ fn translate_insn(
                         Ok(true)
                     }
                 },
+                decoder::Operation::LOADLIT(loadlit) => match loadlit {
+                    decoder::LOADLIT::LDR_Rt_ADDR_PCREL19(ldr) => {
+                        let rt = ldr.rt();
+                        let imm19 = ldr.imm19();
+                        let signed_offset = if imm19 & 0x40000 != 0 {
+                            (imm19 as i64) | (-1i64 << 19)
+                        } else {
+                            imm19 as i64
+                        };
+                        let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
+                        let opc = (insn >> 30) & 0x3;
+                        block.asm.emit_ld_imm(rt, target_addr);
+                        if opc == 0 {
+                            block.asm.emit_ldr_w(rt, rt);
+                        } else {
+                            block.asm.emit_ldr_x(rt, rt);
+                        }
+                        Ok(true)
+                    }
+                    decoder::LOADLIT::LDR_Ft_ADDR_PCREL19(ldr) => {
+                        let rt = ldr.rt();
+                        let imm19 = ldr.imm19();
+                        let signed_offset = if imm19 & 0x40000 != 0 {
+                            (imm19 as i64) | (-1i64 << 19)
+                        } else {
+                            imm19 as i64
+                        };
+                        let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
+                        let opc = (insn >> 30) & 0x3;
+                        // Use x17 as scratch (intra-procedure-call scratch register)
+                        block.asm.emit_ld_imm(17, target_addr);
+                        match opc {
+                            0 => block.asm.emit_ldr_s(rt, 17),
+                            1 => block.asm.emit_ldr_d(rt, 17),
+                            _ => block.asm.emit_ldr_q(rt, 17),
+                        }
+                        Ok(true)
+                    }
+                    decoder::LOADLIT::LDRSW_Rt_ADDR_PCREL19(ldr) => {
+                        let rt = ldr.rt();
+                        let imm19 = ldr.imm19();
+                        let signed_offset = if imm19 & 0x40000 != 0 {
+                            (imm19 as i64) | (-1i64 << 19)
+                        } else {
+                            imm19 as i64
+                        };
+                        let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
+                        block.asm.emit_ld_imm(rt, target_addr);
+                        block.asm.emit_ldrsw(rt, rt);
+                        Ok(true)
+                    }
+                    decoder::LOADLIT::PRFM_PRFOP_ADDR_PCREL19(_) => {
+                        // Prefetch is a performance hint, not required for correctness
+                        Ok(true)
+                    }
+                },
                 _ => {
                     block.emit(insn);
                     Ok(true)
                 }
             }
         } else {
-            Err(Error::InstructionDecode(format!(
-                "Failed to decode instruction 0x{:08x} at 0x{:016x}",
-                insn, addr
-            )))
+            // Hit non-instruction data (e.g. literal pool embedded in the text
+            // section). End the block — the data lives in guest memory and is
+            // accessed by translated LDR literal sequences, not executed.
+            Ok(false)
         }
     } else {
         trace!("End of translatable region at 0x{:016x}", addr);

@@ -189,6 +189,36 @@ impl Assembler {
         self.emit(insn);
     }
 
+    /// Emits LDR Xt, [Xn] (64-bit register-indirect load).
+    pub fn emit_ldr_x(&mut self, rd: u32, rn: u32) {
+        self.emit(0xf9400000 | (rd & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
+    /// Emits LDR Wt, [Xn] (32-bit register-indirect load).
+    pub fn emit_ldr_w(&mut self, rd: u32, rn: u32) {
+        self.emit(0xb9400000 | (rd & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
+    /// Emits LDRSW Xt, [Xn] (sign-extending 32-bit register-indirect load).
+    pub fn emit_ldrsw(&mut self, rd: u32, rn: u32) {
+        self.emit(0xb9800000 | (rd & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
+    /// Emits LDR St, [Xn] (32-bit SIMD/FP register-indirect load).
+    pub fn emit_ldr_s(&mut self, rt: u32, rn: u32) {
+        self.emit(0xbd400000 | (rt & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
+    /// Emits LDR Dt, [Xn] (64-bit SIMD/FP register-indirect load).
+    pub fn emit_ldr_d(&mut self, rt: u32, rn: u32) {
+        self.emit(0xfd400000 | (rt & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
+    /// Emits LDR Qt, [Xn] (128-bit SIMD/FP register-indirect load).
+    pub fn emit_ldr_q(&mut self, rt: u32, rn: u32) {
+        self.emit(0x3dc00000 | (rt & 0x1f) | ((rn & 0x1f) << 5));
+    }
+
     /// Emits a raw 32-bit instruction.
     pub fn emit(&mut self, insn: u32) {
         unsafe {

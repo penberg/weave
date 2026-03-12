@@ -3,6 +3,12 @@ use crate::{Error, Result};
 use disarm64::decoder;
 use tracing::trace;
 
+/// Immediate value for conditional branches to skip the fallthrough dispatch path.
+/// The fallthrough path is 5 instructions (4 from emit_ld_imm + 1 from emit_b_imm).
+/// Since branch offsets are PC-relative from the branch instruction itself, the
+/// immediate is 5 + 1 = 6 (target = PC + 6*4 = first instruction of the taken path).
+const FALLTHROUGH_SKIP_IMM: u32 = 6;
+
 /// Translate and cache a basic block
 pub fn translate_block(
     ctx: &mut crate::runtime::ExecutionContext,
@@ -125,7 +131,6 @@ fn translate_insn(
                 },
                 decoder::Operation::COMPBRANCH(comp_branch) => match comp_branch {
                     decoder::COMPBRANCH::CBZ_Rt_ADDR_PCREL19(cbz) => {
-                        let rt = cbz.rt();
                         let imm19 = cbz.imm19();
                         let signed_offset = if imm19 & 0x40000 != 0 {
                             (imm19 as i64) | (-1i64 << 19)
@@ -134,14 +139,13 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        // CBZ: branch if Rt == 0, which is condition EQ (0)
-                        // First emit: cmp Rt, #0 to set flags
-                        block.asm.emit_cmp_imm(rt, 0);
-                        block.emit_exit_stub_cond_branch(0, target_addr, fallthrough_addr);
+                        // Re-emit the original CBZ/CBNZ with patched offset to the
+                        // taken exit stub. This preserves the sf bit (32-bit vs 64-bit
+                        // register check) and does NOT modify NZCV flags.
+                        block.emit_exit_stub_patched_branch(insn, 0x7ffff << 5, target_addr, fallthrough_addr);
                         Ok(false)
                     }
                     decoder::COMPBRANCH::CBNZ_Rt_ADDR_PCREL19(cbnz) => {
-                        let rt = cbnz.rt();
                         let imm19 = cbnz.imm19();
                         let signed_offset = if imm19 & 0x40000 != 0 {
                             (imm19 as i64) | (-1i64 << 19)
@@ -150,18 +154,13 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        // CBNZ: branch if Rt != 0, which is condition NE (1)
-                        // First emit: cmp Rt, #0 to set flags
-                        block.asm.emit_cmp_imm(rt, 0);
-                        block.emit_exit_stub_cond_branch(1, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(insn, 0x7ffff << 5, target_addr, fallthrough_addr);
                         Ok(false)
                     }
                 },
                 decoder::Operation::TESTBRANCH(test_branch) => match test_branch {
                     decoder::TESTBRANCH::TBZ_Rt_BIT_NUM_ADDR_PCREL14(tbz) => {
-                        let rt = tbz.rt();
                         let imm14 = tbz.imm14();
-                        let bit_num = (tbz.b5() << 5) | tbz.b40();
                         let signed_offset = if imm14 & 0x2000 != 0 {
                             (imm14 as i64) | (-1i64 << 14)
                         } else {
@@ -169,17 +168,13 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        // TBZ: branch if bit is zero
-                        // Use tst (ands xzr, Rt, #(1 << bit_num)) to set Z flag
-                        block.asm.emit_tst_imm(rt, bit_num);
-                        // Branch if Z flag is set (condition EQ = 0)
-                        block.emit_exit_stub_cond_branch(0, target_addr, fallthrough_addr);
+                        // Re-emit the original TBZ/TBNZ with patched offset.
+                        // Preserves bit-test semantics and does NOT modify NZCV.
+                        block.emit_exit_stub_patched_branch(insn, 0x3fff << 5, target_addr, fallthrough_addr);
                         Ok(false)
                     }
                     decoder::TESTBRANCH::TBNZ_Rt_BIT_NUM_ADDR_PCREL14(tbnz) => {
-                        let rt = tbnz.rt();
                         let imm14 = tbnz.imm14();
-                        let bit_num = (tbnz.b5() << 5) | tbnz.b40();
                         let signed_offset = if imm14 & 0x2000 != 0 {
                             (imm14 as i64) | (-1i64 << 14)
                         } else {
@@ -187,11 +182,7 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        // TBNZ: branch if bit is not zero
-                        // Use tst (ands xzr, Rt, #(1 << bit_num)) to set Z flag
-                        block.asm.emit_tst_imm(rt, bit_num);
-                        // Branch if Z flag is not set (condition NE = 1)
-                        block.emit_exit_stub_cond_branch(1, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(insn, 0x3fff << 5, target_addr, fallthrough_addr);
                         Ok(false)
                     }
                 },
@@ -468,27 +459,47 @@ impl TranslatedBlockBuilder {
         target_address: u64,
         fallthrough_address: u64,
     ) {
-        // For conditional branches, we need to:
-        // 1. Emit the conditional branch that checks the condition
-        // 2. If condition is true: load target_address and jump to dispatcher
-        // 3. If condition is false: load fallthrough_address and jump to dispatcher
+        // Emit conditional branch that jumps to taken path if condition is true.
+        // Skip offset = FALLTHROUGH_SKIP_IMM instructions (4 from ld_imm + 1 from b_imm).
+        self.asm
+            .emit_b_cond(cond, FALLTHROUGH_SKIP_IMM as i32 * 4);
+        self.emit_dispatch_pair(fallthrough_address, target_address);
+    }
 
-        // The emit_ld_imm generates 4 instructions (movz + 3 movk)
-        // The emit_b_imm generates 1 instruction
-        // So the taken path is 5 instructions total
+    /// Exit stub for CBZ/CBNZ and TBZ/TBNZ instructions.
+    ///
+    /// Re-emits the original instruction with a patched immediate offset that
+    /// jumps to the taken exit path. This preserves:
+    /// - The sf bit (32-bit Wn vs 64-bit Xn register check for CBZ/CBNZ)
+    /// - Bit-test semantics (b5:b40 bit position for TBZ/TBNZ)
+    /// - NZCV flags (these instructions do not modify condition flags)
+    ///
+    /// `imm_mask` selects which bits hold the PC-relative offset:
+    /// - CBZ/CBNZ: `0x7ffff << 5` (imm19, bits [23:5])
+    /// - TBZ/TBNZ: `0x3fff << 5`  (imm14, bits [18:5])
+    pub fn emit_exit_stub_patched_branch(
+        &mut self,
+        insn: u32,
+        imm_mask: u32,
+        target_address: u64,
+        fallthrough_address: u64,
+    ) {
+        let patched = (insn & !imm_mask) | ((FALLTHROUGH_SKIP_IMM as u32) << 5);
+        self.asm.emit(patched);
+        self.emit_dispatch_pair(fallthrough_address, target_address);
+    }
 
-        // Emit conditional branch that jumps to taken path if condition is true
-        // We need to skip 5 instructions for the fallthrough path
-        self.asm.emit_b_cond(cond, 5 * 4); // Jump over fallthrough path if condition is true
-
-        // Not taken (fallthrough) path: load fallthrough address and jump to dispatcher
-        self.asm.emit_ld_imm(16, fallthrough_address); // x16 = fallthrough_address
+    /// Emits the fallthrough + taken dispatch pair shared by all conditional
+    /// exit stubs. The caller must have already emitted the conditional branch
+    /// instruction whose taken path skips FALLTHROUGH_SKIP_IMM instructions.
+    fn emit_dispatch_pair(&mut self, fallthrough_address: u64, target_address: u64) {
         let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
-        self.asm.emit_b_imm(dispatcher_addr); // b dispatcher_trampoline
-
+        // Fallthrough path: load fallthrough address and jump to dispatcher
+        self.asm.emit_ld_imm(16, fallthrough_address);
+        self.asm.emit_b_imm(dispatcher_addr);
         // Taken path: load target address and jump to dispatcher
-        self.asm.emit_ld_imm(16, target_address); // x16 = target_address
-        self.asm.emit_b_imm(dispatcher_addr); // b dispatcher_trampoline
+        self.asm.emit_ld_imm(16, target_address);
+        self.asm.emit_b_imm(dispatcher_addr);
     }
 
     pub fn emit_exit_stub_indirect_branch(&mut self, src_reg: u32) {

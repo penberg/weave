@@ -2,3 +2,6 @@
 testing/dyload/dyload
 testing/dyload/libnondet.dylib
 testing/darwin-arm64/branch-pac
+testing/darwin-arm64/branch-cbz
+testing/darwin-arm64/branch-nzcv
+testing/darwin-arm64/ldr-literal

@@ -46,27 +46,18 @@ impl Assembler {
     /// * `reg` - Target register (0-31)
     /// * `value` - 64-bit immediate value to load
     pub fn emit_ld_imm(&mut self, reg: u32, value: u64) {
+        // Always emit exactly 4 instructions (MOVZ + 3x MOVK) for a fixed-size
+        // sequence. This is required because the exit stub branch offsets are
+        // hardcoded assuming emit_ld_imm produces exactly 4 instructions.
+
         // MOVZ: Load lowest 16 bits, zero others
-        let insn = 0xd2800000 | (reg & 0x1f) | (((value & 0xFFFF) as u32) << 5);
-        self.emit(insn);
-
-        // MOVK: Load bits 16-31 if needed
-        if value > 0xFFFF {
-            let insn = 0xf2a00000 | (reg & 0x1f) | ((((value >> 16) & 0xFFFF) as u32) << 5);
-            self.emit(insn);
-        }
-
-        // MOVK: Load bits 32-47 if needed
-        if value > 0xFFFFFFFF {
-            let insn = 0xf2c00000 | (reg & 0x1f) | ((((value >> 32) & 0xFFFF) as u32) << 5);
-            self.emit(insn);
-        }
-
-        // MOVK: Load bits 48-63 if needed
-        if value > 0xFFFFFFFFFFFF {
-            let insn = 0xf2e00000 | (reg & 0x1f) | ((((value >> 48) & 0xFFFF) as u32) << 5);
-            self.emit(insn);
-        }
+        self.emit(0xd2800000 | (reg & 0x1f) | (((value & 0xFFFF) as u32) << 5));
+        // MOVK: Load bits 16-31
+        self.emit(0xf2a00000 | (reg & 0x1f) | ((((value >> 16) & 0xFFFF) as u32) << 5));
+        // MOVK: Load bits 32-47
+        self.emit(0xf2c00000 | (reg & 0x1f) | ((((value >> 32) & 0xFFFF) as u32) << 5));
+        // MOVK: Load bits 48-63
+        self.emit(0xf2e00000 | (reg & 0x1f) | ((((value >> 48) & 0xFFFF) as u32) << 5));
     }
 
     /// Emits a branch with link to register (BLR) instruction.
@@ -92,24 +83,6 @@ impl Assembler {
     /// * `src` - Source register (0-31)
     pub fn emit_mov(&mut self, dest: u32, src: u32) {
         self.emit(0xaa0003e0 | (dest & 0x1f) | ((src & 0x1f) << 16));
-    }
-
-    /// Emits a compare-immediate instruction (CMP Xn, #imm).
-    ///
-    /// This is encoded as SUBS XZR, Xn, #imm (discarding the result).
-    ///
-    /// # Arguments
-    ///
-    /// * `reg` - Register to compare (0-31)
-    /// * `imm12` - 12-bit unsigned immediate value
-    pub fn emit_cmp_imm(&mut self, reg: u32, imm12: u32) {
-        assert!(imm12 <= 0xfff, "CMP immediate out of range: {}", imm12);
-        // CMP is alias for SUBS with XZR destination
-        // SUBS Xd, Xn, #imm12: 1_1_1_10001_shift_imm12_Rn_Rd
-        // sf=1 (64-bit), op=1 (subtract), S=1 (set flags)
-        // shift=0 (no shift), Rd=31 (XZR)
-        let insn = 0xf100001f | ((imm12 & 0xfff) << 10) | ((reg & 0x1f) << 5);
-        self.emit(insn);
     }
 
     /// Emits a branch (B) instruction to an immediate address.
@@ -156,36 +129,6 @@ impl Assembler {
         let imm19 = ((offset / 4) & 0x7ffff) as u32;
         // B.cond encoding: 0101010_0_imm19_0_cond
         let insn = 0x54000000 | (imm19 << 5) | (cond & 0xf);
-        self.emit(insn);
-    }
-
-    /// Emits a TST instruction to test a specific bit in a register.
-    ///
-    /// Tests if the given bit is set or clear by ANDing the register with
-    /// a mask. The Z flag will be set if the bit is 0.
-    ///
-    /// # Arguments
-    ///
-    /// * `reg` - Register to test (0-31)
-    /// * `bit_num` - Bit position to test (0-63)
-    pub fn emit_tst_imm(&mut self, reg: u32, bit_num: u32) {
-        assert!(bit_num < 64, "Bit number out of range: {}", bit_num);
-        // TST is ANDS with XZR as destination
-        // For testing a single bit, we use the logical immediate encoding
-        // ARM64 logical immediate uses immr/imms/N fields
-        // For a single bit mask (1 << bit_num), the encoding is:
-        // - N = 1 (for 64-bit)
-        // - immr = (64 - bit_num) mod 64
-        // - imms = 0 (for a single bit)
-        // ANDS Xd, Xn, #imm: 1_11_100100_N_immr_imms_Rn_Rd
-        let n: u32 = 1;
-        let immr = (64 - bit_num) % 64;
-        let imms: u32 = 0;
-        let insn = 0xf200001f // ANDS X31 (XZR), Xn, #imm base
-            | (n << 22)
-            | (immr << 16)
-            | (imms << 10)
-            | ((reg & 0x1f) << 5);
         self.emit(insn);
     }
 

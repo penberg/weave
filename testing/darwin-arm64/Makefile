@@ -8,6 +8,16 @@ TESTS += branch-cbz
 TESTS += branch-nzcv
 TESTS += branch-pac
 TESTS += ldr-literal
+TESTS += cond-codes
+TESTS += arith-flags
+TESTS += mem-addressing
+TESTS += simd-basic
+TESTS += simd-preserve
+TESTS += jump-table
+TESTS += adr-adrp
+TESTS += shifts-bitops
+TESTS += branch-backward
+TESTS += mul-div
 
 ASFLAGS =
 LDFLAGS =

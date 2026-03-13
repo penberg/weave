@@ -6,6 +6,9 @@ TESTS += time
 TESTS += qsort
 TESTS += math
 #TESTS += pthreads
+TESTS += stdio
+TESTS += string
+TESTS += memory
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

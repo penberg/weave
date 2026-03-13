@@ -7,6 +7,14 @@ TESTS += setjmp_test
 TESTS += callback
 TESTS += tail_call
 TESTS += stack_align
+TESTS += switch
+TESTS += loops
+TESTS += bitwise
+TESTS += int_fp_mixed
+TESTS += register_pressure
+TESTS += string_ops
+TESTS += recursion_deep
+TESTS += complex_control
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

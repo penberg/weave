@@ -1,8 +1,11 @@
 loop
 main
 math
+memory
 printf
 pthreads
 qsort
 random
+stdio
+string
 time

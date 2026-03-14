@@ -170,4 +170,16 @@ impl Assembler {
             self.text_len += 4;
         }
     }
+
+    /// Push link register (x30) onto the stack: `str x30, [sp, #-16]!`.
+    /// Encoding: 0xF81F0FFE
+    pub fn emit_push_lr(&mut self) {
+        self.emit(0xF81F0FFE);
+    }
+
+    /// Pop link register (x30) from the stack: `ldr x30, [sp], #16`.
+    /// Encoding: 0xF84107FE
+    pub fn emit_pop_lr(&mut self) {
+        self.emit(0xF84107FE);
+    }
 }

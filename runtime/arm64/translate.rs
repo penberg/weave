@@ -425,23 +425,20 @@ impl TranslatedBlockBuilder {
 
     /// Generate optimized syscall handling using syscall wrapper
     pub fn emit_syscall_wrapper(&mut self, svc_imm: u32) {
-        // DON'T overwrite X0! The guest has set up syscall arguments in registers.
-        // Pass svc_imm in a different register that the wrapper can use.
-        // Use X9 as a scratch register to pass svc_imm to the wrapper
-        self.asm.emit_ld_imm(9, svc_imm as u64); // mov x9, #svc_imm
+        // Avoid clobbering guest GPRs before the wrapper saves state.
+        // Pass svc_imm via x17 (IP1), and save/restore LR on the stack.
+        self.asm.emit_ld_imm(17, svc_imm as u64); // x17 := svc_imm
 
-        // Save x30 (link register) before clobbering it - the guest's return address
-        // must be preserved across syscalls. Use x10 as a temporary.
-        self.asm.emit_mov(10, 30); // mov x10, x30
+        // Push guest LR (like MAMBO does) before BLR clobbers x30
+        self.asm.emit_push_lr();
 
         // Call the assembly syscall wrapper that handles all register save/restore
         let wrapper_addr = dispatcher::syscall_wrapper as *const () as u64;
         self.asm.emit_ld_imm(30, wrapper_addr);
-        self.asm.emit_blr(30); // call syscall_wrapper() - gets svc_imm from x9
+        self.asm.emit_blr(30); // wrapper reads svc_imm from saved x17
 
-        // Restore x30 from x10 - this is critical! Without this, x30 would contain
-        // the code cache return address, causing incorrect returns.
-        self.asm.emit_mov(30, 10); // mov x30, x10
+        // Restore guest LR
+        self.asm.emit_pop_lr();
     }
 
     pub fn emit_exit_stub_branch(&mut self, target_address: u64) {

@@ -161,6 +161,36 @@ impl DynamicLinker {
                         }
                     }
                 }
+                goblin::elf::reloc::R_X86_64_COPY => {
+                    let sym_idx = reloc.r_sym;
+                    if let Some(sym) = elf.dynsyms.get(sym_idx) {
+                        if let Some(sym_name) = elf.dynstrtab.get_at(sym.st_name) {
+                            let sym_addr = self.resolve_symbol(sym_name).ok_or_else(|| {
+                                Error::DynamicLinker(format!(
+                                    "Unresolved COPY symbol: {}",
+                                    sym_name
+                                ))
+                            })?;
+
+                            let dst = (reloc.r_offset
+                                + crate::sys::linux::elf::ELF_BASE_ADDRESS)
+                                as *mut u8;
+                            let size = sym.st_size as usize;
+
+                            debug!(
+                                "COPY relocation: {} ({} bytes from 0x{:x} to {:?})",
+                                sym_name, size, sym_addr, dst
+                            );
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    sym_addr as *const u8,
+                                    dst,
+                                    size,
+                                );
+                            }
+                        }
+                    }
+                }
                 _ => {
                     debug!("Unsupported relocation type: {}", reloc.r_type);
                 }

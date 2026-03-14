@@ -373,13 +373,18 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let opc = (insn >> 30) & 0x3;
-                        // Use x17 as scratch (intra-procedure-call scratch register)
-                        block.asm.emit_ld_imm(17, target_addr);
+                        // Use x11 as a temporary to compute the literal address, but
+                        // preserve any guest value by saving/restoring around the use.
+                        // We intentionally avoid x17 here; x17 (IP1) is reserved for
+                        // passing svc_imm into the syscall wrapper after state save.
+                        block.asm.emit_push_x11();      // spill guest x11 to [sp, #-16]!
+                        block.asm.emit_ld_imm(11, target_addr);
                         match opc {
-                            0 => block.asm.emit_ldr_s(rt, 17),
-                            1 => block.asm.emit_ldr_d(rt, 17),
-                            _ => block.asm.emit_ldr_q(rt, 17),
+                            0 => block.asm.emit_ldr_s(rt, 11),
+                            1 => block.asm.emit_ldr_d(rt, 11),
+                            _ => block.asm.emit_ldr_q(rt, 11),
                         }
+                        block.asm.emit_pop_x11();       // restore guest x11 from [sp], #16
                         Ok(true)
                     }
                     decoder::LOADLIT::LDRSW_Rt_ADDR_PCREL19(ldr) => {

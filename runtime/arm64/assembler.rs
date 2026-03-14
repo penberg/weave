@@ -182,4 +182,16 @@ impl Assembler {
     pub fn emit_pop_lr(&mut self) {
         self.emit(0xF84107FE);
     }
+
+    /// Push x11 onto the stack: `str x11, [sp, #-16]!`.
+    /// Encoding: 0xF81F0FEB
+    pub fn emit_push_x11(&mut self) {
+        self.emit(0xF81F0FEB);
+    }
+
+    /// Pop x11 from the stack: `ldr x11, [sp], #16`.
+    /// Encoding: 0xF84107EB
+    pub fn emit_pop_x11(&mut self) {
+        self.emit(0xF84107EB);
+    }
 }

@@ -8,6 +8,7 @@ TESTS += branch-cbz
 TESTS += branch-nzcv
 TESTS += branch-pac
 TESTS += ldr-literal
+TESTS += ldr-fp-clobber
 TESTS += cond-codes
 TESTS += arith-flags
 TESTS += mem-addressing

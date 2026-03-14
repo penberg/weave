@@ -216,39 +216,79 @@ fn translate_insn(
                     }
                     decoder::BRANCH_REG::BLR_Rn(blr) => {
                         let return_addr = addr + 4;
-                        block.asm.emit_ld_imm(30, return_addr);
                         let reg = blr.rn();
-                        block.emit_exit_stub_indirect_branch(reg);
+
+                        // Preserve branch target before touching x30. If rn==x30,
+                        // loading the return address into x30 would destroy the
+                        // branch target. Move target to x16 first, then set LR.
+                        if reg != 16 {
+                            block.asm.emit_mov(16, reg); // x16 := target
+                        }
+
+                        // Set guest return address for the call
+                        block.asm.emit_ld_imm(30, return_addr);
+
+                        // Jump via unified dispatcher trampoline with x16 as target
+                        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+                        block.asm.emit_b_imm(dispatcher_addr);
                         Ok(false)
                     }
                     // BLRAA/BLRAAZ/BLRAB/BLRABZ: Branch with link and pointer authentication
                     // We treat these as regular BLR since we don't implement PAC
                     decoder::BRANCH_REG::BLRAA_Rn_Rd_SP(blraa) => {
                         let return_addr = addr + 4;
-                        block.asm.emit_ld_imm(30, return_addr);
                         let reg = blraa.rn();
-                        block.emit_exit_stub_indirect_branch(reg);
+
+                        if reg != 16 {
+                            block.asm.emit_mov(16, reg);
+                        }
+
+                        block.asm.emit_ld_imm(30, return_addr);
+
+                        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+                        block.asm.emit_b_imm(dispatcher_addr);
                         Ok(false)
                     }
                     decoder::BRANCH_REG::BLRAAZ_Rn(blraaz) => {
                         let return_addr = addr + 4;
-                        block.asm.emit_ld_imm(30, return_addr);
                         let reg = blraaz.rn();
-                        block.emit_exit_stub_indirect_branch(reg);
+
+                        if reg != 16 {
+                            block.asm.emit_mov(16, reg);
+                        }
+
+                        block.asm.emit_ld_imm(30, return_addr);
+
+                        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+                        block.asm.emit_b_imm(dispatcher_addr);
                         Ok(false)
                     }
                     decoder::BRANCH_REG::BLRAB_Rn_Rd_SP(blrab) => {
                         let return_addr = addr + 4;
-                        block.asm.emit_ld_imm(30, return_addr);
                         let reg = blrab.rn();
-                        block.emit_exit_stub_indirect_branch(reg);
+
+                        if reg != 16 {
+                            block.asm.emit_mov(16, reg);
+                        }
+
+                        block.asm.emit_ld_imm(30, return_addr);
+
+                        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+                        block.asm.emit_b_imm(dispatcher_addr);
                         Ok(false)
                     }
                     decoder::BRANCH_REG::BLRABZ_Rn(blrabz) => {
                         let return_addr = addr + 4;
-                        block.asm.emit_ld_imm(30, return_addr);
                         let reg = blrabz.rn();
-                        block.emit_exit_stub_indirect_branch(reg);
+
+                        if reg != 16 {
+                            block.asm.emit_mov(16, reg);
+                        }
+
+                        block.asm.emit_ld_imm(30, return_addr);
+
+                        let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
+                        block.asm.emit_b_imm(dispatcher_addr);
                         Ok(false)
                     }
                     decoder::BRANCH_REG::RET_Rn(ret) => {

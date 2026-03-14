@@ -7,3 +7,11 @@ setjmp_test
 callback
 tail_call
 stack_align
+bitwise
+complex_control
+int_fp_mixed
+loops
+recursion_deep
+register_pressure
+string_ops
+switch

@@ -23,6 +23,13 @@ _main:
     // Do FP literal loads that previously clobbered x17
     ldr s0, lit_f32
     ldr d1, lit_f64
+    ldr q2, lit_f128
+
+    // Minimal check: verify lower 64 bits of q2 match lit_f128
+    ldr x14, lit_f128
+    fmov x15, d2
+    cmp x15, x14
+    b.ne test_failed
 
     // Verify x17 still holds the magic value (use x13 as temp to avoid clobbering x11)
     movz x13, #0xDEF0, lsl #0
@@ -65,6 +72,10 @@ lit_f32:
 
 lit_f64:
     .quad 0x4008000000000000   // 3.0
+
+lit_f128:
+    .quad 0x4008000000000000   // lower 64 bits
+    .quad 0x4010000000000000   // upper 64 bits
 
 msg:     .ascii "PASS: x17_surv\n"
 msg11:   .ascii "PASS: x11_surv\n"

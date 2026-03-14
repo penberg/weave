@@ -18,6 +18,7 @@ TESTS += adr-adrp
 TESTS += shifts-bitops
 TESTS += branch-backward
 TESTS += mul-div
+TESTS += syscall-regs
 
 ASFLAGS =
 LDFLAGS =

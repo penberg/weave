@@ -166,7 +166,7 @@ _dispatcher_trampoline:
 /// logging, or emulation.
 ///
 /// # Inputs
-/// - `x9`: svc immediate value
+/// - `x17`: svc immediate value
 /// - `x8`/`x16`: system call number (platform dependent)
 /// - `x0`-`x7`: system call arguments
 ///
@@ -184,7 +184,7 @@ _syscall_wrapper:
 	stp	x2,  x3,  [sp, #0x10]		// Syscall args 2-3
 	stp	x4,  x5,  [sp, #0x20]		// Syscall args 4-5
 	stp	x6,  x7,  [sp, #0x30]		// Syscall args 6-7
-	stp	x8,  x9,  [sp, #0x40]		// x8: syscall#, x9: svc_imm
+	stp	x8,  x9,  [sp, #0x40]		// x8: syscall#
 	stp	x10, x11, [sp, #0x50]
 	stp	x12, x13, [sp, #0x60]
 	stp	x14, x15, [sp, #0x70]
@@ -218,7 +218,8 @@ _syscall_wrapper:
 	// ----------------------------------------------------------
 	// Step 4: Invoke system call handler
 	// ----------------------------------------------------------
-	ldr	x1, [sp, #(512 + 0x48)]		// arg1: svc_imm (from x9)
+	// Read svc_imm from saved x17 to avoid x9/x10 clobbering
+	ldr	x1, [sp, #(512 + 0x88)]		// arg1: svc_imm (from x17)
 	add	x0, sp, #512			// arg0: CPU state ptr
 	bl	_syscall_handler		// Call C handler
 

@@ -200,6 +200,23 @@ unsafe extern "C" {
     /// Saves guest CPU state, calls the Rust syscall handler, then
     /// restores state and returns to guest code.
     pub fn syscall_wrapper();
+
+    /// Global variable holding supervisor stack top pointer (set by Rust)
+    static mut supervisor_stack_top: usize;
+}
+
+/// Initialize the supervisor stack pointer for the ARM64 dispatcher.
+///
+/// # Safety
+/// The provided memory must remain valid for the process lifetime.
+pub unsafe fn init_supervisor_stack(stack_ptr: *mut u8, stack_size: usize) {
+    // Calculate top of stack (stacks grow downward)
+    let top = unsafe { stack_ptr.add(stack_size) as usize };
+    unsafe { supervisor_stack_top = top; }
+    tracing::trace!(
+        "ARM64 supervisor stack initialized: base={:p}, size=0x{:x}, top=0x{:x}",
+        stack_ptr, stack_size, top
+    );
 }
 
 // Defines the dispatcher_trampoline() and syscall_wrapper() functions.

@@ -4,6 +4,7 @@ TESTS += sysinfo
 TESTS += sched_getaffinity
 TESTS += prlimit64
 TESTS += arch_prctl
+TESTS += prctl
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

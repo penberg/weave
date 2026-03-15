@@ -12,9 +12,12 @@ const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
 const SYS_SYSINFO: i64 = 99;
 const SYS_SCHED_GETAFFINITY: i64 = 204;
+const SYS_PRCTL: i64 = 157;
 const SYS_ARCH_PRCTL: i64 = 158;
 const SYS_PRLIMIT64: i64 = 302;
 const SYS_GETRANDOM: i64 = 318;
+
+static mut THREAD_NAME: [u8; 16] = [0u8; 16];
 
 const FUTEX_PRIVATE_FLAG: i32 = 128;
 const FUTEX_WAIT: i32 = 0;
@@ -105,6 +108,34 @@ pub fn syscall(
                 }
             }
             0
+        }
+        SYS_PRCTL => {
+            const PR_SET_NAME: u64 = 15;
+            const PR_GET_NAME: u64 = 16;
+            match arg1 {
+                PR_SET_NAME => {
+                    let name = arg2 as *const u8;
+                    unsafe {
+                        let dst = std::ptr::addr_of_mut!(THREAD_NAME) as *mut u8;
+                        std::ptr::write_bytes(dst, 0, 16);
+                        for i in 0..15 {
+                            let c = *name.add(i);
+                            if c == 0 { break; }
+                            *dst.add(i) = c;
+                        }
+                    }
+                    0
+                }
+                PR_GET_NAME => {
+                    let buf = arg2 as *mut u8;
+                    unsafe {
+                        let src = std::ptr::addr_of!(THREAD_NAME) as *const u8;
+                        std::ptr::copy_nonoverlapping(src, buf, 16);
+                    }
+                    0
+                }
+                _ => -libc::EINVAL as libc::c_long,
+            }
         }
         SYS_ARCH_PRCTL => {
             const ARCH_SET_FS: u64 = 0x1002;

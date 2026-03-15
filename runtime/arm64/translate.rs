@@ -218,6 +218,8 @@ fn translate_insn(
                         let return_addr = addr + 4;
                         let reg = blr.rn();
 
+                        // No varargs bridging here; preserve generic BLR semantics only.
+
                         // Preserve branch target before touching x30. If rn==x30,
                         // loading the return address into x30 would destroy the
                         // branch target. Move target to x16 first, then set LR.
@@ -239,6 +241,8 @@ fn translate_insn(
                         let return_addr = addr + 4;
                         let reg = blraa.rn();
 
+                        // No varargs bridging here.
+
                         if reg != 16 {
                             block.asm.emit_mov(16, reg);
                         }
@@ -253,6 +257,8 @@ fn translate_insn(
                         let return_addr = addr + 4;
                         let reg = blraaz.rn();
 
+                        // No varargs bridging here.
+
                         if reg != 16 {
                             block.asm.emit_mov(16, reg);
                         }
@@ -266,6 +272,8 @@ fn translate_insn(
                     decoder::BRANCH_REG::BLRAB_Rn_Rd_SP(blrab) => {
                         let return_addr = addr + 4;
                         let reg = blrab.rn();
+
+                        // No varargs bridging here.
 
                         if reg != 16 {
                             block.asm.emit_mov(16, reg);

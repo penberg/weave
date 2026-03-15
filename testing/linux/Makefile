@@ -1,4 +1,5 @@
 TESTS += math
+TESTS += getrandom
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

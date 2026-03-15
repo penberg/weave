@@ -10,6 +10,7 @@ use tracing::trace;
 const SYS_EXIT: i64 = 60;
 const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
+const SYS_GETRANDOM: i64 = 318;
 
 const FUTEX_PRIVATE_FLAG: i32 = 128;
 const FUTEX_WAIT: i32 = 0;
@@ -62,6 +63,13 @@ pub fn syscall(
                     todo!("unsupported futex operation: 0x{:x}", arg2);
                 }
             }
+        }
+        SYS_GETRANDOM => {
+            let buf = arg1 as *mut u8;
+            let len = arg2 as usize;
+            let slice = unsafe { std::slice::from_raw_parts_mut(buf, len) };
+            crate::runtime::random::fill_bytes(slice);
+            len as libc::c_long
         }
         _ => {
             todo!("unsupported syscall via libc wrapper: {}", number);

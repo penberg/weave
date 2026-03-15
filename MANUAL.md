@@ -48,6 +48,19 @@ RUST_LOG=debug weave ./myprogram    # Enable debug logging
 RUST_LOG=trace weave ./myprogram    # Enable trace logging
 ```
 
+## Simulated Machine Model
+
+Weave presents a deterministic virtual machine to the guest program. The guest always sees the same machine, regardless of the host it runs on.
+
+| Property | Value |
+|----------|-------|
+| CPUs | 1 |
+| Total RAM | 8 GB |
+| Free RAM | 4 GB |
+| Processes | 1 |
+| Stack size limit | 8 MB |
+| Open file limit | 1024 |
+
 ## Limitations
 
 ### Platform Support

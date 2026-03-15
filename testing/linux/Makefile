@@ -1,6 +1,7 @@
 TESTS += math
 TESTS += getrandom
 TESTS += sysinfo
+TESTS += sched_getaffinity
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

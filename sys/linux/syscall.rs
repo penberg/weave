@@ -11,6 +11,7 @@ const SYS_EXIT: i64 = 60;
 const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
 const SYS_SYSINFO: i64 = 99;
+const SYS_SCHED_GETAFFINITY: i64 = 204;
 const SYS_GETRANDOM: i64 = 318;
 
 const FUTEX_PRIVATE_FLAG: i32 = 128;
@@ -77,6 +78,15 @@ pub fn syscall(
                 (*si).mem_unit = 1;
             }
             0
+        }
+        SYS_SCHED_GETAFFINITY => {
+            let cpusetsize = arg2 as usize;
+            let mask = arg3 as *mut u8;
+            unsafe {
+                std::ptr::write_bytes(mask, 0, cpusetsize);
+                *mask = 1; // CPU 0 only
+            }
+            8 // size of cpumask in bytes
         }
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;

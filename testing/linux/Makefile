@@ -3,6 +3,7 @@ TESTS += getrandom
 TESTS += sysinfo
 TESTS += sched_getaffinity
 TESTS += prlimit64
+TESTS += arch_prctl
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

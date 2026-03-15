@@ -12,6 +12,7 @@ const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
 const SYS_SYSINFO: i64 = 99;
 const SYS_SCHED_GETAFFINITY: i64 = 204;
+const SYS_ARCH_PRCTL: i64 = 158;
 const SYS_PRLIMIT64: i64 = 302;
 const SYS_GETRANDOM: i64 = 318;
 
@@ -104,6 +105,45 @@ pub fn syscall(
                 }
             }
             0
+        }
+        SYS_ARCH_PRCTL => {
+            const ARCH_SET_FS: u64 = 0x1002;
+            const ARCH_GET_FS: u64 = 0x1003;
+            match arg1 {
+                ARCH_SET_FS => {
+                    unsafe { super::kernel::GUEST_FS_BASE = arg2 };
+                    0
+                }
+                ARCH_GET_FS => {
+                    let ptr = arg2 as *mut u64;
+                    let mut fs_base = unsafe { super::kernel::GUEST_FS_BASE };
+                    if fs_base == 0 {
+                        // No TLS set up yet — allocate a minimal TCB with a
+                        // self-pointer so fs:0 reads work.
+                        let tcb = unsafe {
+                            libc::mmap(
+                                std::ptr::null_mut(),
+                                4096,
+                                libc::PROT_READ | libc::PROT_WRITE,
+                                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                                -1,
+                                0,
+                            )
+                        };
+                        if tcb != libc::MAP_FAILED {
+                            let addr = tcb as u64;
+                            unsafe {
+                                *(tcb as *mut u64) = addr;
+                                super::kernel::GUEST_FS_BASE = addr;
+                            }
+                            fs_base = addr;
+                        }
+                    }
+                    unsafe { *ptr = fs_base };
+                    0
+                }
+                _ => -libc::EINVAL as libc::c_long,
+            }
         }
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;

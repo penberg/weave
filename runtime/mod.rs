@@ -98,7 +98,7 @@ impl ExecutionContext {
         }
 
         // Initialize the supervisor stack in the dispatcher assembly
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         unsafe {
             arch::dispatcher::init_supervisor_stack(
                 supervisor_stack as *mut u8,

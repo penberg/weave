@@ -1,215 +1,191 @@
-#include <stdio.h>
+// CHECK: PASS: gp20_sum
+// CHECK: PASS: pairs10_sum
+// CHECK: PASS: ptr_call_gp12
+// CHECK: PASS: forward_via_va_list
+// CHECK: PASS: nested_va_copy
+// CHECK: PASS: sp_align
+// CHECK: PASS: promote_chars_shorts_bools
+// CHECK: PASS: promote_floats_to_double
+// CHECK: PASS: pairs16_sum
+// CHECK: PASS: long_double_triple
+// CHECK: PASS: syscall_then_varargs
+
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
 #include <unistd.h>
-#include <string.h>
 
-// Helper to write int (avoid using printf)
-void write_int(long val) {
-    char buf[24];
-    int len = 0;
-    if (val == 0) {
-        buf[len++] = '0';
-    } else {
-        char tmp[24];
-        int i = 0;
-        unsigned long v = (val < 0) ? -val : val;
-        if (val < 0) {
-            buf[len++] = '-';
-        }
-        while (v > 0) {
-            tmp[i++] = '0' + (v % 10);
-            v /= 10;
-        }
-        while (i > 0) buf[len++] = tmp[--i];
+static int sum_ints(int n, ...) {
+    va_list ap; va_start(ap, n);
+    long long acc = 0;
+    for (int i=0;i<n;i++) acc += va_arg(ap,int);
+    va_end(ap);
+    return (int)acc;
+}
+
+static int sum_pairs(int n_pairs, ...) {
+    va_list ap; va_start(ap, n_pairs);
+    long long acc = 0;
+    for (int i=0;i<n_pairs;i++) {
+        int x = va_arg(ap,int);
+        double d = va_arg(ap,double);
+        acc += x + (int)d;
     }
-    write(1, buf, len);
+    va_end(ap);
+    return (int)acc;
 }
 
-// Helper to write hex
-void write_hex(unsigned long val) {
-    char buf[20] = "0x";
-    const char *hex = "0123456789abcdef";
-    int len = 2;
-    if (val == 0) {
-        buf[len++] = '0';
-    } else {
-        char tmp[16];
-        int i = 0;
-        while (val > 0) {
-            tmp[i++] = hex[val & 0xf];
-            val >>= 4;
-        }
-        while (i > 0) buf[len++] = tmp[--i];
+static int sum_ints_va(int n, va_list ap) {
+    va_list cp; va_copy(cp, ap);
+    long long acc = 0;
+    for (int i=0;i<n;i++) acc += va_arg(cp,int);
+    va_end(cp);
+    return (int)acc;
+}
+
+static int forward_sum_ints(int n, ...) {
+    va_list ap; va_start(ap, n);
+    int r = sum_ints_va(n, ap);
+    va_end(ap);
+    return r;
+}
+
+static int nested_copy_helper(va_list *pap, int n) {
+    va_list cp; va_copy(cp, *pap);
+    long long acc = 0;
+    for (int i=0;i<n;i++) acc += va_arg(cp,int);
+    va_end(cp);
+    return (int)acc;
+}
+
+static int nested_copy(int n, ...) {
+    va_list ap; va_start(ap, n);
+    int r = nested_copy_helper(&ap, n);
+    va_end(ap);
+    return r;
+}
+
+static int check_sp_aligned(void) {
+    uintptr_t sp;
+#if defined(__aarch64__)
+    __asm__ volatile ("mov %0, sp" : "=r"(sp));
+#elif defined(__x86_64__)
+    __asm__ volatile ("mov %%rsp, %0" : "=r"(sp));
+#else
+    sp = (uintptr_t)&sp;
+#endif
+    return (sp & 0xF) == 0;
+}
+
+static int approx_eq(double a, double b, double eps) {
+    return fabs(a - b) < eps;
+}
+
+static int approx_eql(long double a, long double b, long double eps) {
+    return fabsl(a - b) < eps;
+}
+
+/* Sum floats passed via varargs (promoted to double) */
+static double sum_floats_promoted(int n, ...) {
+    va_list ap; va_start(ap, n);
+    double acc = 0.0;
+    for (int i = 0; i < n; i++) acc += va_arg(ap, double);
+    va_end(ap);
+    return acc;
+}
+
+/* Sum long doubles passed via varargs */
+static long double sum_long_double(int n, ...) {
+    va_list ap; va_start(ap, n);
+    long double acc = 0.0L;
+    for (int i = 0; i < n; i++) acc += va_arg(ap, long double);
+    va_end(ap);
+    return acc;
+}
+
+/* Perform a syscall before consuming varargs, then sum ints */
+static int sum_after_syscall(int n, ...) {
+    (void)getpid();
+    va_list ap; va_start(ap, n);
+    long long acc = 0;
+    for (int i = 0; i < n; i++) acc += va_arg(ap, int);
+    va_end(ap);
+    return (int)acc;
+}
+
+int main(void) {
+    int failed = 0;
+
+    // 1) 20 GP ints (overflows GP regs onto stack)
+    int a = sum_ints(20, 1,2,3,4,5,6,7,8,9,10,
+                          11,12,13,14,15,16,17,18,19,20);
+    if (a == 210) printf("PASS: gp20_sum\n"); else { printf("FAIL: gp20_sum=%d\n", a); failed = 1; }
+
+    // 2) 10 (int,double) pairs – mixes GP/FP, stresses FP spill/restore
+    int b = sum_pairs(10,
+        1, (double)1, 2, (double)2, 3, (double)3, 4, (double)4, 5, (double)5,
+        6, (double)6, 7, (double)7, 8, (double)8, 9, (double)9, 10, (double)10);
+    if (b == (1+1)+(2+2)+(3+3)+(4+4)+(5+5)+(6+6)+(7+7)+(8+8)+(9+9)+(10+10))
+        printf("PASS: pairs10_sum\n");
+    else { printf("FAIL: pairs10_sum=%d\n", b); failed = 1; }
+
+    // 3) Function pointer varargs call (compiler emits BLR)
+    int (*fn)(int, ...) = sum_ints;
+    int c = fn(12, 1,2,3,4,5,6,7,8,9,10,11,12);
+    if (c == 78) printf("PASS: ptr_call_gp12\n"); else { printf("FAIL: ptr_call_gp12=%d\n", c); failed = 1; }
+
+    // 4) Forwarder via va_list
+    int d = forward_sum_ints(10, 1,2,3,4,5,6,7,8,9,10);
+    if (d == 55) printf("PASS: forward_via_va_list\n"); else { printf("FAIL: forward_via_va_list=%d\n", d); failed = 1; }
+
+    // 5) Nested va_copy across multiple frames
+    int e = nested_copy(8, 1,2,3,4,5,6,7,8);
+    if (e == 36) printf("PASS: nested_va_copy\n"); else { printf("FAIL: nested_va_copy=%d\n", e); failed = 1; }
+
+    // 6) SP alignment at entry
+    if (check_sp_aligned()) printf("PASS: sp_align\n"); else { printf("FAIL: sp_align\n"); failed = 1; }
+
+    /* 7) Default promotions: char/short/bool -> int */
+    {
+        int r = sum_ints(6, (char)1, (short)2, (bool)1, (char)-3, (short)-4, (bool)0);
+        if (r == (1 + 2 + 1 - 3 - 4 + 0)) printf("PASS: promote_chars_shorts_bools\n");
+        else { printf("FAIL: promote_chars_shorts_bools=%d\n", r); failed = 1; }
     }
-    write(1, buf, len);
-}
 
-// Test 1: Simple va_arg in same function
-void test1_simple(const char *msg, ...) {
-    va_list ap;
-    va_start(ap, msg);
-    int val = va_arg(ap, int);
-    va_end(ap);
-    write(1, "test1: ", 7);
-    write_int(val);
-    write(1, "\n", 1);
-}
-
-// Test 2: Pass va_list to another function (like printf does)
-void helper2(va_list ap) {
-    int val = va_arg(ap, int);
-    write(1, "test2: ", 7);
-    write_int(val);
-    write(1, "\n", 1);
-}
-
-void test2_pass_valist(const char *msg, ...) {
-    va_list ap;
-    va_start(ap, msg);
-    helper2(ap);  // Pass va_list by value
-    va_end(ap);
-}
-
-// Test 3: Pass pointer to va_list (how printf really works)
-void helper3(va_list *ap) {
-    int val = va_arg(*ap, int);
-    write(1, "test3: ", 7);
-    write_int(val);
-    write(1, "\n", 1);
-}
-
-void test3_pass_valist_ptr(const char *msg, ...) {
-    va_list ap;
-    va_start(ap, msg);
-    helper3(&ap);  // Pass pointer to va_list
-    va_end(ap);
-}
-
-// Test 4: sprintf (test formatting without stdout complexity)
-void test4_sprintf() {
-    char buf[64];
-    memset(buf, 'X', sizeof(buf));  // Fill with X to see what gets written
-    int ret = sprintf(buf, "test4: %d", 42);
-    // Show what was formatted
-    write(1, "sprintf returned: ", 18);
-    write_int(ret);
-    write(1, ", result: [", 11);
-    write(1, buf, strlen(buf));
-    write(1, "]\n", 2);
-}
-
-// Test 4b: vsprintf to see va_list handling
-void do_vsprintf(char *buf, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    // Show va_list and raw memory bytes
-    write(1, "va_list=", 8);
-    write_hex((unsigned long)ap);
-    write(1, ", bytes: ", 9);
-    unsigned char *bytes = (unsigned char*)ap;
-    for (int i = 0; i < 16; i++) {
-        write_hex(bytes[i]);
-        write(1, " ", 1);
+    /* 8) float -> double promotion in varargs */
+    {
+        double s = sum_floats_promoted(3, (float)1.5f, (float)2.0f, (float)3.5f);
+        if (approx_eq(s, 7.0, 1e-9)) printf("PASS: promote_floats_to_double\n");
+        else { printf("FAIL: promote_floats_to_double=%f\n", s); failed = 1; }
     }
-    write(1, ", as_int=", 9);
-    write_int(*(int*)ap);
-    write(1, ", as_long=", 10);
-    write_int(*(long*)ap);
-    write(1, "\n", 1);
-    vsprintf(buf, fmt, ap);
-    va_end(ap);
-}
 
-void test4b_vsprintf() {
-    char buf[64];
-    do_vsprintf(buf, "test4b: %d", 42);
-    write(1, "vsprintf result: [", 18);
-    write(1, buf, strlen(buf));
-    write(1, "]\n", 2);
-}
-
-// Test 4c: Mimic what vsprintf does internally (multiple nested function calls with va_list)
-__attribute__((noinline))
-int do_format_int(va_list *ap) {
-    int val = va_arg(*ap, int);
-    return val;
-}
-
-__attribute__((noinline))
-void do_format(char *buf, const char *fmt, va_list ap) {
-    // Mimic vsprintf: call another function to read va_arg
-    // Use va_copy because on Linux x86-64 va_list is an array type,
-    // and passing it to a function decays to a pointer - &ap would be wrong type
-    va_list local_ap;
-    va_copy(local_ap, ap);
-    int val = do_format_int(&local_ap);
-    va_end(local_ap);
-    // Format manually
-    char *p = buf;
-    while (*fmt && *fmt != '%') *p++ = *fmt++;
-    if (*fmt == '%') {
-        fmt++; // skip %
-        fmt++; // skip d
-        // Convert val to string
-        if (val == 0) {
-            *p++ = '0';
-        } else {
-            char tmp[20];
-            int i = 0;
-            int v = val;
-            while (v > 0) {
-                tmp[i++] = '0' + (v % 10);
-                v /= 10;
-            }
-            while (i > 0) *p++ = tmp[--i];
-        }
+    /* 9) 16 (int,double) pairs – pushes well past register window */
+    {
+        int b16 = sum_pairs(16,
+            1,(double)1, 2,(double)2, 3,(double)3, 4,(double)4,
+            5,(double)5, 6,(double)6, 7,(double)7, 8,(double)8,
+            9,(double)9, 10,(double)10, 11,(double)11, 12,(double)12,
+            13,(double)13, 14,(double)14, 15,(double)15, 16,(double)16);
+        int expected = 2 * (16 * 17 / 2); /* sum(1..16) * 2 */
+        if (b16 == expected) printf("PASS: pairs16_sum\n");
+        else { printf("FAIL: pairs16_sum=%d\n", b16); failed = 1; }
     }
-    *p = '\0';
-}
 
-void test4c_nested() {
-    char buf[64];
-    va_list ap;
-    // Can't use va_start without a real varargs function, so use inline
-    // We'll create a wrapper
-}
+    /* 10) long double in varargs (alignment and width) */
+    {
+        long double ld = sum_long_double(3, 1.0L, 2.0L, 3.0L);
+        if (approx_eql(ld, 6.0L, 1e-12L)) printf("PASS: long_double_triple\n");
+        else { printf("FAIL: long_double_triple=%.3Lf\n", ld); failed = 1; }
+    }
 
-// Wrapper to test nested va_list handling
-void do_nested(char *buf, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    write(1, "test4c: before do_format, ap=", 29);
-    write_hex((unsigned long)ap);
-    write(1, ", [ap]=", 7);
-    write_int(*(int*)ap);
-    write(1, "\n", 1);
-    do_format(buf, fmt, ap);
-    va_end(ap);
-}
+    /* 11) syscall before reading varargs (regression guard) */
+    {
+        int s = sum_after_syscall(10, 1,2,3,4,5,6,7,8,9,10);
+        if (s == 55) printf("PASS: syscall_then_varargs\n");
+        else { printf("FAIL: syscall_then_varargs=%d\n", s); failed = 1; }
+    }
 
-void test4c() {
-    char buf[64];
-    do_nested(buf, "value: %d", 42);
-    write(1, "test4c result: [", 16);
-    write(1, buf, strlen(buf));
-    write(1, "]\n", 2);
-}
-
-// Test 5: snprintf
-void test5_snprintf() {
-    char buf[64];
-    int len = snprintf(buf, sizeof(buf), "test5: %d", 42);
-    write(1, buf, len);
-    write(1, "\n", 1);
-}
-
-int main() {
-    test1_simple("msg", 42);
-    test2_pass_valist("msg", 42);
-    test3_pass_valist_ptr("msg", 42);
-    test4_sprintf();
-    test4b_vsprintf();
-    test4c();
-    test5_snprintf();
-    return 0;
+    return failed ? 1 : 0;
 }

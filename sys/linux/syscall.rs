@@ -10,6 +10,7 @@ use tracing::trace;
 const SYS_EXIT: i64 = 60;
 const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
+const SYS_SYSINFO: i64 = 99;
 const SYS_GETRANDOM: i64 = 318;
 
 const FUTEX_PRIVATE_FLAG: i32 = 128;
@@ -63,6 +64,19 @@ pub fn syscall(
                     todo!("unsupported futex operation: 0x{:x}", arg2);
                 }
             }
+        }
+        SYS_SYSINFO => {
+            let si = arg1 as *mut libc::sysinfo;
+            let uptime = crate::runtime::time::now() / 1_000_000; // ticks → seconds
+            unsafe {
+                std::ptr::write_bytes(si, 0, 1);
+                (*si).uptime = uptime as libc::c_long;
+                (*si).totalram = 8 * 1024 * 1024 * 1024; // 8 GB
+                (*si).freeram = 4 * 1024 * 1024 * 1024;
+                (*si).procs = 1;
+                (*si).mem_unit = 1;
+            }
+            0
         }
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;

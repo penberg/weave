@@ -1,5 +1,6 @@
 TESTS += math
 TESTS += getrandom
+TESTS += sysinfo
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

@@ -12,6 +12,7 @@ const SYS_FUTEX: i64 = 202;
 const SYS_EXIT_GROUP: i64 = 231;
 const SYS_SYSINFO: i64 = 99;
 const SYS_SCHED_GETAFFINITY: i64 = 204;
+const SYS_PRLIMIT64: i64 = 302;
 const SYS_GETRANDOM: i64 = 318;
 
 const FUTEX_PRIVATE_FLAG: i32 = 128;
@@ -25,7 +26,7 @@ pub fn syscall(
     arg1: u64,
     arg2: u64,
     arg3: u64,
-    _arg4: u64,
+    arg4: u64,
     _arg5: u64,
 ) -> libc::c_long {
     trace!("syscall wrapper: number={}", number);
@@ -87,6 +88,22 @@ pub fn syscall(
                 *mask = 1; // CPU 0 only
             }
             8 // size of cpumask in bytes
+        }
+        SYS_PRLIMIT64 => {
+            // arg1 = pid (0 = self), arg2 = resource, arg3 = new_limit, arg4 = old_limit
+            let old_limit = arg4 as *mut libc::rlimit;
+            if !old_limit.is_null() {
+                let (cur, max): (u64, u64) = match arg2 {
+                    3 => (8 * 1024 * 1024, u64::MAX),   // RLIMIT_STACK: 8 MB
+                    7 => (1024, 1024 * 1024),            // RLIMIT_NOFILE: 1024
+                    _ => (u64::MAX, u64::MAX),
+                };
+                unsafe {
+                    (*old_limit).rlim_cur = cur;
+                    (*old_limit).rlim_max = max;
+                }
+            }
+            0
         }
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;

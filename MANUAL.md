@@ -58,6 +58,8 @@ Weave presents a deterministic virtual machine to the guest program. The guest a
 | Total RAM | 8 GB |
 | Free RAM | 4 GB |
 | Processes | 1 |
+| Stack size limit | 8 MB |
+| Open file limit | 1024 |
 
 ## Limitations
 

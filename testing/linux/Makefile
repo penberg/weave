@@ -2,6 +2,7 @@ TESTS += math
 TESTS += getrandom
 TESTS += sysinfo
 TESTS += sched_getaffinity
+TESTS += prlimit64
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

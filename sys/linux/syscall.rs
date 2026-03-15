@@ -15,6 +15,7 @@ const SYS_SCHED_GETAFFINITY: i64 = 204;
 const SYS_PRCTL: i64 = 157;
 const SYS_ARCH_PRCTL: i64 = 158;
 const SYS_SET_TID_ADDRESS: i64 = 218;
+const SYS_SCHED_YIELD: i64 = 24;
 const SYS_SET_ROBUST_LIST: i64 = 273;
 const SYS_PRLIMIT64: i64 = 302;
 const SYS_GETRANDOM: i64 = 318;
@@ -179,6 +180,7 @@ pub fn syscall(
             }
         }
         SYS_SET_TID_ADDRESS => 1000, // deterministic TID
+        SYS_SCHED_YIELD => 0,       // no-op for single-threaded
         SYS_SET_ROBUST_LIST => 0,   // no-op for single-threaded
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;

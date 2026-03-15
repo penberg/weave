@@ -7,6 +7,7 @@ TESTS += arch_prctl
 TESTS += prctl
 TESTS += set_tid_address
 TESTS += set_robust_list
+TESTS += sched_yield
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

@@ -2,6 +2,11 @@
 name = "weave"
 version = "0.1.0"
 edition = "2024"
+description = "Deterministic execution for reproducible debugging"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/penberg/weave"
+homepage = "https://github.com/penberg/weave"
 
 [[bin]]
 name = "weave"
@@ -22,3 +27,8 @@ macros = { path = "macros" }
 thiserror = "2.0.12"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

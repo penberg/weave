@@ -28,6 +28,14 @@ Modern software contains non-deterministic bugs that appear randomly and disappe
 
 ## 🧑‍💻 Getting Started
 
+Install a prebuilt release on supported platforms with:
+
+```console
+> curl --proto '=https' --tlsv1.2 -LsSf https://github.com/penberg/weave/releases/latest/download/weave-installer.sh | sh
+```
+
+Prebuilt artifacts are currently published for Darwin/arm64 and Linux/x86_64.
+
 Run your program with `weave` to execute it deterministically:
 
 ```console

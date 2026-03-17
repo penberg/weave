@@ -17,9 +17,7 @@ name = "weave"
 path = "lib.rs"
 
 [dependencies]
-disarm64 = "0.1.24"
 goblin = "0.9"
-iced-x86 = "1.21"
 intervaltree = "0.2.7"
 libc = "0.2.172"
 linkme = "0.3"
@@ -27,6 +25,12 @@ macros = { path = "macros" }
 thiserror = "2.0.12"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+disarm64 = "0.1.24"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+iced-x86 = "1.21"
 
 # The profile that 'dist' will build with
 [profile.dist]

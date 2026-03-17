@@ -34,8 +34,9 @@ iced-x86 = "1.21"
 
 [profile.release]
 codegen-units = 16
+opt-level = 1
+lto = false
 
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"

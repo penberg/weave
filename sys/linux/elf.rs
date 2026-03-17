@@ -152,7 +152,10 @@ fn load_segments(elf: &ElfFile) {
             )
         };
         if reserve == libc::MAP_FAILED {
-            panic!("Failed to reserve segment: {}", std::io::Error::last_os_error());
+            panic!(
+                "Failed to reserve segment: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         // Then, overlay the file-backed portion (p_filesz only, not p_memsz).

@@ -280,19 +280,25 @@ fn setup_tls(elf: &Elf) {
     use goblin::elf::program_header::PT_TLS;
 
     let tls_phdr = elf.program_headers.iter().find(|ph| ph.p_type == PT_TLS);
-    let tls_phdr = match tls_phdr {
-        Some(ph) => ph,
-        None => return, // No TLS segment
+
+    // Even without a PT_TLS segment, we need a minimal TLS area because
+    // glibc uses fs:0x28 for the stack canary. The TCB must be large enough
+    // to cover at least offset 0x28 + 8 = 0x30 bytes past the FS base.
+    let (tls_memsz, tls_filesz, tls_align) = match tls_phdr {
+        Some(ph) => (
+            ph.p_memsz as usize,
+            ph.p_filesz as usize,
+            std::cmp::max(ph.p_align as usize, 16),
+        ),
+        None => (0, 0, 16),
     };
 
-    let tls_memsz = tls_phdr.p_memsz as usize;
-    let tls_filesz = tls_phdr.p_filesz as usize;
-    let tls_align = std::cmp::max(tls_phdr.p_align as usize, 16);
-
-    // Total allocation: aligned TLS block + TCB (8 bytes for self-pointer)
-    // The TLS block is placed before the TCB, aligned to tls_align
+    // Total allocation: aligned TLS block + TCB
+    // The TCB needs at least 0x30 bytes for the self-pointer (offset 0)
+    // and stack canary (offset 0x28).
+    let tcb_size = 0x30;
     let tls_block_size = (tls_memsz + tls_align - 1) & !(tls_align - 1);
-    let total_size = tls_block_size + 8; // +8 for TCB self-pointer
+    let total_size = tls_block_size + tcb_size;
 
     // Allocate the TLS area
     let tls_area = unsafe {
@@ -314,13 +320,15 @@ fn setup_tls(elf: &Elf) {
 
     // Copy the TLS initialization image (the initialized data portion)
     // The init image is at p_vaddr + ELF_BASE_ADDRESS in the loaded guest
-    if tls_filesz > 0 {
-        let src = (tls_phdr.p_vaddr + ELF_BASE_ADDRESS) as *const u8;
-        // TLS data goes at the start of the TLS block
-        // In variant II, TLS variables are at negative offsets from TCB
-        let dst = unsafe { tcb_addr.sub(tls_memsz) };
-        unsafe {
-            std::ptr::copy_nonoverlapping(src, dst, tls_filesz);
+    if let Some(phdr) = tls_phdr {
+        if tls_filesz > 0 {
+            let src = (phdr.p_vaddr + ELF_BASE_ADDRESS) as *const u8;
+            // TLS data goes at the start of the TLS block
+            // In variant II, TLS variables are at negative offsets from TCB
+            let dst = unsafe { tcb_addr.sub(tls_memsz) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, dst, tls_filesz);
+            }
         }
     }
 

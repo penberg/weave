@@ -41,6 +41,19 @@
 //! ```
 
 	.text
+
+// Supervisor stack and saved application SP
+	.data
+	.align 3
+	.globl	_supervisor_stack_top
+_supervisor_stack_top:
+	.quad 0
+
+	.globl	_app_stack_save
+_app_stack_save:
+	.quad 0
+
+	.text
 	.align	4
 
 // ==================================================================
@@ -63,10 +76,20 @@
 /// from any context where stack space is available.
 	.global	_dispatcher_trampoline
 _dispatcher_trampoline:
+	// Preserve x16/x17 on application stack, record original SP
+	stp	x16, x17, [sp, #-16]!
+	add	x17, sp, #16
+	adrp	x16, _app_stack_save@PAGE
+	str	x17, [x16, _app_stack_save@PAGEOFF]
+
+	// Switch to supervisor stack
+	adrp	x16, _supervisor_stack_top@PAGE
+	ldr	x16, [x16, _supervisor_stack_top@PAGEOFF]
+	mov	sp, x16
 	// ----------------------------------------------------------
 	// Step 1: Preserve general-purpose registers
 	// ----------------------------------------------------------
-	sub	sp, sp, #0x110			// Allocate stack frame
+	sub	sp, sp, #0x110			// Allocate stack frame on supervisor stack
 	
 	stp	x0,  x1,  [sp, #0x00]		// Argument registers
 	stp	x2,  x3,  [sp, #0x10]
@@ -76,7 +99,12 @@ _dispatcher_trampoline:
 	stp	x10, x11, [sp, #0x50]		// Temporary registers
 	stp	x12, x13, [sp, #0x60]
 	stp	x14, x15, [sp, #0x70]
-	stp	x16, x17, [sp, #0x80]		// x16: target address
+	// Load original x16/x17 from application stack saved pair and store to CPU state
+	adrp	x16, _app_stack_save@PAGE
+	ldr	x16, [x16, _app_stack_save@PAGEOFF]		// x16 = original SP
+	sub	x16, x16, #16					// address of saved (x16,x17)
+	ldp	x16, x17, [x16]				// reload original x16/x17
+	stp	x16, x17, [sp, #0x80]			// save into CPU state
 	stp	x18, x19, [sp, #0x90]		// Platform register
 	stp	x20, x21, [sp, #0xa0]		// Callee-saved
 	stp	x22, x23, [sp, #0xb0]
@@ -107,10 +135,10 @@ _dispatcher_trampoline:
 	// ----------------------------------------------------------
 	// Step 4: Invoke high-level dispatcher
 	// ----------------------------------------------------------
-	mov	x0, x16				// arg0: target address
-	add	x1, sp, #512			// arg1: CPU state ptr
+	mov	x0, x16			// arg0: target address
+	add	x1, sp, #512			// arg1: CPU state ptr (on supervisor stack)
 	bl	_dispatcher			// Call C dispatcher
-	mov	x16, x0				// Save new target
+	mov	x16, x0			// Save new target
 
 	// ----------------------------------------------------------
 	// Step 5: Restore NEON/SIMD state
@@ -129,7 +157,7 @@ _dispatcher_trampoline:
 	msr	fpsr, x21			// Restore FP status
 
 	// ----------------------------------------------------------
-	// Step 7: Restore general-purpose registers
+	// Step 7: Restore general-purpose registers (except x16)
 	// ----------------------------------------------------------
 	ldp	x0,  x1,  [sp, #0x00]		// Argument registers
 	ldp	x2,  x3,  [sp, #0x10]
@@ -139,8 +167,7 @@ _dispatcher_trampoline:
 	ldp	x10, x11, [sp, #0x50]
 	ldp	x12, x13, [sp, #0x60]
 	ldp	x14, x15, [sp, #0x70]
-	// x16 contains jump target - preserve it
-	ldr	x17,      [sp, #0x88]		// Restore x17 only
+	// Defer restoring x17 until after SP restore
 	ldp	x18, x19, [sp, #0x90]
 	ldp	x20, x21, [sp, #0xa0]
 	ldp	x22, x23, [sp, #0xb0]
@@ -149,7 +176,18 @@ _dispatcher_trampoline:
 	ldp	x28, x29, [sp, #0xe0]
 	ldr	x30,      [sp, #0xf0]		// Link register
 	
-	add	sp, sp, #0x110			// Release stack frame
+	add	sp, sp, #0x110			// Release supervisor frame
+
+	// Restore application SP without clobbering guest regs
+	mov	x17, x16				// save branch target temporarily
+	adrp	x16, _app_stack_save@PAGE
+	ldr	x16, [x16, _app_stack_save@PAGEOFF]
+	mov	sp, x16				// switch back to app stack
+	mov	x16, x17				// restore branch target
+	// Recover guest x17 from the saved (x16,x17) pair and drop it
+	sub	sp, sp, #16
+	ldr	x17, [sp, #8]
+	add	sp, sp, #16
 
 	// ----------------------------------------------------------
 	// Step 8: Transfer control to target

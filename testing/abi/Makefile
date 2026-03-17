@@ -1,4 +1,5 @@
 TESTS += varargs
+TESTS += varargs_stress
 TESTS += struct_args
 TESTS += float_args
 TESTS += many_args
@@ -15,6 +16,7 @@ TESTS += register_pressure
 TESTS += string_ops
 TESTS += recursion_deep
 TESTS += complex_control
+TESTS += variadic_bridge
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

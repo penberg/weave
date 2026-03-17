@@ -174,8 +174,81 @@ fn translate_insn(
                     block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
                     block.emit_mov_reg64_from_mem(iced_x86::Register::R11, iced_x86::Register::R11);
                     // Now R11 = guest FS base, store src to [r11 + offset]
-                    block.emit_mov_mem_offset_reg64(iced_x86::Register::R11, offset as i32, src_reg);
+                    block.emit_mov_mem_offset_reg64(
+                        iced_x86::Register::R11,
+                        offset as i32,
+                        src_reg,
+                    );
                     block.asm.emit_pop_reg64(11); // pop r11
+                } else if insn.op0_kind() == iced_x86::OpKind::Register
+                    && insn.op1_kind() == iced_x86::OpKind::Memory
+                {
+                    // ALU op reg, fs:[offset] (e.g., sub rax, fs:[0x28] for stack canary check)
+                    // Strategy: load TLS value into R11, do `op dest, r11`, restore R11.
+                    // POP does not modify RFLAGS, so flags from the ALU op are preserved.
+                    let dest_reg = insn.op0_register();
+                    let mnemonic = insn.code().mnemonic();
+                    trace!(
+                        "TLS ALU: replacing {:?} {:?}, fs:[{}] with guest FS base access",
+                        mnemonic, dest_reg, offset
+                    );
+
+                    // Map mnemonic to opcode for `op r64, r/m64` form
+                    let opcode: u8 = match mnemonic {
+                        iced_x86::Mnemonic::Add => 0x03,
+                        iced_x86::Mnemonic::Or => 0x0B,
+                        iced_x86::Mnemonic::Adc => 0x13,
+                        iced_x86::Mnemonic::Sbb => 0x1B,
+                        iced_x86::Mnemonic::And => 0x23,
+                        iced_x86::Mnemonic::Sub => 0x2B,
+                        iced_x86::Mnemonic::Xor => 0x33,
+                        iced_x86::Mnemonic::Cmp => 0x3B,
+                        _ => {
+                            return Err(Error::InstructionDecode(format!(
+                                "Unhandled FS-prefixed ALU instruction {:?} at 0x{:x}",
+                                mnemonic, addr
+                            )));
+                        }
+                    };
+
+                    if dest_reg == iced_x86::Register::R11 {
+                        // Destination is R11, use RAX as scratch to avoid clobbering
+                        block.asm.emit_push_reg64(0); // push rax
+                        block.emit_mov_reg64_imm64(iced_x86::Register::RAX, fs_base_addr);
+                        block.emit_mov_reg64_from_mem(
+                            iced_x86::Register::RAX,
+                            iced_x86::Register::RAX,
+                        );
+                        block.emit_mov_reg64_from_mem_offset(
+                            iced_x86::Register::RAX,
+                            iced_x86::Register::RAX,
+                            offset as i32,
+                        );
+                        // RAX now holds the TLS value. Emit: <op> r11, rax
+                        let rex: u8 = 0x4C; // REX.WR (r11 is dest, extended)
+                        let modrm: u8 = 0xC0 | (3 << 3); // mod=11, reg=r11(3), rm=rax(0)
+                        block.asm.emit_bytes(&[rex, opcode, modrm]);
+                        block.asm.emit_pop_reg64(0); // pop rax
+                    } else {
+                        block.asm.emit_push_reg64(11); // push r11
+                        block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
+                        block.emit_mov_reg64_from_mem(
+                            iced_x86::Register::R11,
+                            iced_x86::Register::R11,
+                        );
+                        block.emit_mov_reg64_from_mem_offset(
+                            iced_x86::Register::R11,
+                            iced_x86::Register::R11,
+                            offset as i32,
+                        );
+                        // R11 now holds the TLS value. Emit: <op> dest_reg, r11
+                        let dest_num = register_to_number(dest_reg);
+                        let rex =
+                            0x49 | if dest_num >= 8 { 0x04 } else { 0x00 }; // REX.WB (+ REX.R if dest extended)
+                        let modrm = 0xC3 | ((dest_num & 7) << 3); // mod=11, rm=011 (r11), reg=dest
+                        block.asm.emit_bytes(&[rex, opcode, modrm]);
+                        block.asm.emit_pop_reg64(11); // pop r11
+                    }
                 } else {
                     return Err(Error::InstructionDecode(format!(
                         "Unhandled FS-prefixed instruction at 0x{:x}: {:?}",

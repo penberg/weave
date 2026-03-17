@@ -42,9 +42,9 @@ dispatcher_trampoline:
 	// ----------------------------------------------------------
 	// Step 1: Save guest R15 and application RSP
 	// ----------------------------------------------------------
-	// Save guest R15 to guest stack (before we clobber any registers)
-	push	r15
-	// Save application RSP to global variable (avoids clobbering R15)
+	// Save guest R15 to global scratch (NOT guest stack - avoids red zone corruption)
+	mov	[rip + scratch_r15], r15
+	// Save application RSP to global variable
 	mov	[rip + app_stack_save], rsp
 
 	// ----------------------------------------------------------
@@ -101,10 +101,10 @@ dispatcher_trampoline:
 	// ----------------------------------------------------------
 	// Step 4: Align stack and call dispatcher
 	// ----------------------------------------------------------
-	// Stack layout after all pushes (high address → low address):
+	// Supervisor stack layout after all pushes (high address → low address):
 	//
-	// rsp+264: r10 (TARGET ADDRESS)
-	// rsp+256: r15 (app RSP)
+	// rsp+264: r10 (DISPATCH TARGET)
+	// rsp+256: application RSP (from app_stack_save global)
 	//        --- callee-saved registers ---
 	// rsp+248: rbx
 	// rsp+240: rbp
@@ -118,7 +118,7 @@ dispatcher_trampoline:
 	// rsp+184: rcx
 	// rsp+176: r8
 	// rsp+168: r9
-	// rsp+160: r10 (clobbered - contains target, not app value)
+	// rsp+160: r10 (dispatch target, not guest value)
 	// rsp+152: r11
 	// rsp+144: rax
 	//        --- XMM registers (136 bytes with 8-byte padding) ---
@@ -126,8 +126,12 @@ dispatcher_trampoline:
 	//        --- flags ---
 	// rsp+0:   rflags (8 bytes)
 	//
-	// Total stack usage:
-	//   Initial pushes: 2 qwords (r10, r15) = 16 bytes
+	// Note: Guest R10 and R15 are saved to global scratch variables
+	// (scratch_r10, scratch_r15) instead of the stack to avoid
+	// corrupting the x86-64 red zone.
+	//
+	// Total supervisor stack usage:
+	//   Initial pushes: 2 qwords (target, app RSP) = 16 bytes
 	//   Callee-saved:   5 qwords = 40 bytes
 	//   Caller-saved:   9 qwords = 72 bytes (including rcx!)
 	//   XMM space:      136 bytes (128 + 8 padding)
@@ -195,12 +199,13 @@ dispatcher_trampoline:
 	mov	rsp, [rip + app_stack_save]
 
 	// ----------------------------------------------------------
-	// Step 8: Restore guest's R15 and R10 from guest stack
+	// Step 8: Restore guest's R15 and R10 from global scratch
 	// ----------------------------------------------------------
-	// The trampoline entry pushed R15, and exit stubs pushed R10 before
-	// overwriting it with dispatch target. Pop both to restore guest values.
-	pop	r15
-	pop	r10
+	// Exit stubs saved guest R10 to scratch_r10 (via MOVABS, not stack push).
+	// Trampoline entry saved guest R15 to scratch_r15 (via RIP-relative MOV).
+	// Restore both without touching the guest stack to preserve the red zone.
+	mov	r15, [rip + scratch_r15]
+	mov	r10, [rip + scratch_r10]
 
 	// ----------------------------------------------------------
 	// Step 9: Transfer control to translated code
@@ -362,4 +367,13 @@ app_stack_save:
 
 /// Translated block target address (used by dispatcher trampoline)
 translated_target:
+	.quad	0
+
+/// Scratch space for guest R10 (saved by exit stubs to avoid red zone corruption)
+	.globl	scratch_r10
+scratch_r10:
+	.quad	0
+
+/// Scratch space for guest R15 (saved by trampoline to avoid red zone corruption)
+scratch_r15:
 	.quad	0

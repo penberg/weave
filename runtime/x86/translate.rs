@@ -797,6 +797,13 @@ impl TranslatedBlockBuilder {
             .emit_sse_f3_xmm_from_reg(opcode2, xmm_num, base_num);
     }
 
+    /// Emit the R10 save sequence (XCHG+MOVABS+XCHG) to preserve guest R10
+    /// in the global scratch variable without touching the stack or flags.
+    fn emit_save_guest_r10(&mut self) {
+        let scratch_r10_addr = &raw const dispatcher::scratch_r10 as u64;
+        self.asm.emit_save_r10_to_scratch(scratch_r10_addr);
+    }
+
     /// Generate syscall handling wrapper
     pub fn emit_syscall_wrapper(&mut self) {
         let wrapper_addr = dispatcher::syscall_wrapper as *const () as u64;
@@ -805,9 +812,8 @@ impl TranslatedBlockBuilder {
 
     pub fn emit_exit_stub_branch(&mut self, target_address: u64) {
         let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
-
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
+        // Save guest R10 to global scratch (avoids red zone corruption)
+        self.emit_save_guest_r10();
         // MOV R10, target_address (dispatch register)
         self.asm.emit_mov_imm64(10, target_address);
         // JMP to dispatcher
@@ -816,9 +822,10 @@ impl TranslatedBlockBuilder {
 
     pub fn emit_call_exit_stub(&mut self, target_address: u64, return_address: u64) {
         // For calls, we need to:
-        // 1. Push return address onto guest stack without clobbering guest registers
-        // 2. Save guest's R10, then load target address into R10 for dispatcher
-        // 3. Jump to dispatcher (which will switch to host stack)
+        // 1. Push return address onto guest stack (legitimate CALL semantics)
+        // 2. Save guest's R10 to global scratch (avoids red zone corruption)
+        // 3. Load target address into R10 for dispatcher
+        // 4. Jump to dispatcher (which will switch to host stack)
 
         // Push return address using sub+mov to avoid clobbering any register
         // SUB RSP, 8
@@ -830,8 +837,8 @@ impl TranslatedBlockBuilder {
         self.asm.emit_bytes(&[0xc7, 0x44, 0x24, 0x04]);
         self.asm.emit_u32((return_address >> 32) as u32);
 
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
+        // Save guest R10 to global scratch (avoids red zone corruption)
+        self.emit_save_guest_r10();
         // MOV R10, target_address (dispatch register)
         self.asm.emit_mov_imm64(10, target_address);
 
@@ -842,18 +849,14 @@ impl TranslatedBlockBuilder {
 
     pub fn emit_ret_exit_stub(&mut self) {
         // For returns, we need to:
-        // 1. Swap guest's R10 with return address on stack
-        // 2. Jump to dispatcher
-        //
-        // Original stack: [..., return_addr] <- RSP
-        // After XCHG: stack [..., saved_R10] <- RSP, R10 = return_addr (dispatch target)
-        // After dispatcher pops R10: R10 = saved_R10 (restored), stack [...] (clean!)
-        //
-        // This way the RET properly "consumes" the return address from the stack.
+        // 1. Save guest R10 to global scratch (avoids red zone corruption)
+        // 2. Pop return address into R10 (dispatch target) - this is proper RET semantics
+        // 3. Jump to dispatcher
 
-        // XCHG R10, [RSP] - swap guest's R10 with return address
-        // Encoding: REX.WR (0x4C) + 0x87 + ModR/M (0x14) + SIB (0x24)
-        self.asm.emit_bytes(&[0x4c, 0x87, 0x14, 0x24]); // xchg r10, [rsp]
+        // Save guest R10 to global scratch
+        self.emit_save_guest_r10();
+        // POP R10 - consume return address from stack (proper RET semantics)
+        self.asm.emit_pop_reg64(10);
 
         // JMP to dispatcher
         let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
@@ -866,35 +869,28 @@ impl TranslatedBlockBuilder {
         target_address: u64,
         fallthrough_address: u64,
     ) {
-        // We need to emit a conditional jump that skips over the fallthrough path
         // Layout:
         //   Jcc <skip_fallthrough>    ; conditional jump (if condition true, skip fallthrough)
-        //   <fallthrough path>         ; MOV RDI + JMP dispatcher
-        //   <taken path>               ; MOV RDI + JMP dispatcher
-
-        // To avoid patching, we emit the fallthrough path into a temporary buffer
-        // to measure its size, then emit the conditional jump with the correct offset
+        //   <fallthrough path>         ; save R10 + MOV R10 + JMP dispatcher
+        //   <taken path>               ; save R10 + MOV R10 + JMP dispatcher
 
         // Save current position
         let jcc_addr = self.asm.addr();
         let size_before_jcc = self.asm.size();
 
         // Emit a placeholder conditional jump (we'll fix it up)
-        // For now, just jump to the current address (0 offset)
         self.asm.emit_jcc_rel32(condition, jcc_addr + 6);
         let jcc_size = self.asm.size() - size_before_jcc; // Should be 6
 
         // Emit fallthrough path
         let fallthrough_start_size = self.asm.size();
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
-        self.asm.emit_mov_imm64(10, fallthrough_address); // R10 = register 10
+        self.emit_save_guest_r10();
+        self.asm.emit_mov_imm64(10, fallthrough_address);
         let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
         self.asm.emit_jmp_rel32(dispatcher_addr);
         let fallthrough_size = self.asm.size() - fallthrough_start_size;
 
-        // Now we know the actual size of the fallthrough path
-        // Fix up the conditional jump to skip over it
+        // Fix up the conditional jump to skip over the fallthrough path
         let taken_addr = jcc_addr + jcc_size as u64 + fallthrough_size as u64;
         let jcc_end = jcc_addr + jcc_size as u64;
         let offset = (taken_addr as i64) - (jcc_end as i64);
@@ -906,22 +902,21 @@ impl TranslatedBlockBuilder {
         }
 
         // Emit taken path
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
-        self.asm.emit_mov_imm64(10, target_address); // R10 = register 10
+        self.emit_save_guest_r10();
+        self.asm.emit_mov_imm64(10, target_address);
         self.asm.emit_jmp_rel32(dispatcher_addr);
     }
 
     pub fn emit_exit_stub_indirect_jump(&mut self, insn: &iced_x86::Instruction) {
         // For indirect jumps, we need to:
-        // 1. Save guest's R10 to guest stack
+        // 1. Save guest's R10 to global scratch (avoids red zone corruption)
         // 2. Load the target address into R10
         // 3. Jump to dispatcher
 
         use iced_x86::OpKind;
 
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
+        // Save guest R10 to global scratch
+        self.emit_save_guest_r10();
 
         match insn.op0_kind() {
             OpKind::Register => {
@@ -933,12 +928,8 @@ impl TranslatedBlockBuilder {
                 if reg_num != 10 {
                     self.asm.emit_mov_reg_to_reg(10, reg_num); // MOV R10, reg
                 }
-                // If reg_num == 10, R10 already has the target (but we just pushed it, so we need to reload)
-                // Actually if it's R10, we need to load from where we pushed it
-                if reg_num == 10 {
-                    // mov r10, [rsp] - reload from stack since we just pushed it
-                    self.asm.emit_bytes(&[0x4c, 0x8b, 0x14, 0x24]); // mov r10, [rsp]
-                }
+                // If reg_num == 10, R10 already contains the target (and scratch
+                // already has the guest R10 saved), so nothing more to do.
 
                 // Jump to dispatcher
                 let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
@@ -949,13 +940,11 @@ impl TranslatedBlockBuilder {
                 // Load the target address from memory into R10 directly
                 self.asm.emit_mov_indirect_to_reg64(10, insn);
 
-                // Jump to dispatcher - it will handle supervisor code and return address translation
+                // Jump to dispatcher
                 let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
                 self.asm.emit_jmp_rel32(dispatcher_addr);
             }
             _ => {
-                // Unsupported operand kind, fall back to identity translation
-                // This shouldn't happen for valid x86-64 code
                 panic!(
                     "Unsupported operand kind for indirect jump: {:?}",
                     insn.op0_kind()
@@ -970,8 +959,8 @@ impl TranslatedBlockBuilder {
         return_address: u64,
     ) {
         // For indirect calls, we need to:
-        // 1. Push return address onto guest stack
-        // 2. Save guest's R10 to guest stack
+        // 1. Push return address onto guest stack (legitimate CALL semantics)
+        // 2. Save guest's R10 to global scratch (avoids red zone corruption)
         // 3. Load the target address into R10 (dispatch register)
         // 4. Jump to dispatcher
 
@@ -987,8 +976,8 @@ impl TranslatedBlockBuilder {
         self.asm.emit_bytes(&[0xc7, 0x44, 0x24, 0x04]);
         self.asm.emit_u32((return_address >> 32) as u32);
 
-        // PUSH R10 (save guest's R10 value to guest stack)
-        self.asm.emit_push_reg64(10);
+        // Save guest R10 to global scratch
+        self.emit_save_guest_r10();
 
         match insn.op0_kind() {
             OpKind::Register => {
@@ -999,11 +988,9 @@ impl TranslatedBlockBuilder {
                 // Move target to R10 (dispatch register)
                 if reg_num != 10 {
                     self.asm.emit_mov_reg_to_reg(10, reg_num); // MOV R10, reg
-                } else {
-                    // If target is R10, reload from where we pushed it
-                    // mov r10, [rsp] - reload from stack since we just pushed it
-                    self.asm.emit_bytes(&[0x4c, 0x8b, 0x14, 0x24]); // mov r10, [rsp]
                 }
+                // If reg_num == 10, R10 already contains the target (scratch
+                // has the guest R10 saved), so nothing more to do.
 
                 // Jump to dispatcher
                 let dispatcher_addr = dispatcher::dispatcher_trampoline as *const () as u64;
@@ -1019,7 +1006,6 @@ impl TranslatedBlockBuilder {
                 self.asm.emit_jmp_rel32(dispatcher_addr);
             }
             _ => {
-                // Unsupported operand kind
                 panic!(
                     "Unsupported operand kind for indirect call: {:?}",
                     insn.op0_kind()

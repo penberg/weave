@@ -83,18 +83,12 @@ pub unsafe extern "C" fn dispatcher(
         unsafe { block.text_start().add(8) as usize }
     } else {
         // Target address is in supervisor code, but we need to translate
-        // the return address if it points to guest code
-
-        // The return address is on the application stack
-        // When we entered the dispatcher, the guest code had already pushed
-        // the return address (for a CALL instruction), then pushed saved_R10,
-        // then the trampoline pushed saved_R15.
-        // Stack layout: [..., return_addr, saved_R10, saved_R15] <- _stack_ptr
-        // We need to read from _stack_ptr + 16 to get return_addr
-
-        // Get the return address from the application stack (above saved R10 and R15)
-        // _stack_ptr points to saved_R15, return_addr is 16 bytes above
-        let return_addr_ptr = unsafe { (_stack_ptr as *mut u64).add(2) };
+        // the return address if it points to guest code.
+        //
+        // Exit stubs save R10/R15 to global scratch (not the guest stack)
+        // to avoid red zone corruption. For CALL stubs, the return address
+        // is the only thing pushed onto the guest stack, so it's at [_stack_ptr].
+        let return_addr_ptr = _stack_ptr as *mut u64;
         let return_addr = unsafe { *return_addr_ptr };
         let is_return_guest = return_addr >= ctx.text_start && return_addr < ctx.text_end;
 
@@ -143,6 +137,10 @@ unsafe extern "C" {
 
     /// Global variable holding supervisor stack top pointer
     static mut supervisor_stack_top: usize;
+
+    /// Scratch space for guest R10 — exit stubs save here via MOVABS to avoid
+    /// corrupting the x86-64 red zone (128 bytes below RSP).
+    pub static mut scratch_r10: u64;
 }
 
 /// Initialize the supervisor stack pointer for the dispatcher

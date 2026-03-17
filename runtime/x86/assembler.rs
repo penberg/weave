@@ -48,18 +48,18 @@ impl Assembler {
             self.emit_u8(0xe9); // JMP rel32
             self.emit_u32(offset as i32 as u32);
         } else {
-            // Target is out of range, use LEA+MOV+RET trampoline.
-            // LEA instead of SUB to preserve guest flags.
-            // LEA RSP, [RSP - 8]
-            self.emit_bytes(&[0x48, 0x8d, 0x64, 0x24, 0xf8]);
-            // MOV DWORD PTR [RSP], low32
-            self.emit_bytes(&[0xc7, 0x04, 0x24]);
-            self.emit_u32(target_addr as u32);
-            // MOV DWORD PTR [RSP+4], high32
-            self.emit_bytes(&[0xc7, 0x44, 0x24, 0x04]);
-            self.emit_u32((target_addr >> 32) as u32);
-            // RET (pops the address and jumps to it, net RSP change = 0)
-            self.emit_u8(0xc3);
+            // Target is out of range. Use RIP-relative indirect jump with
+            // an inline 8-byte literal. This avoids touching the guest stack
+            // (which would corrupt the x86-64 red zone) and doesn't clobber
+            // any registers or flags.
+            //
+            // JMP [RIP+0]       ; 6 bytes (FF 25 00000000)
+            // .quad target_addr ; 8 bytes (inline literal, never executed)
+            //
+            // The CPU reads the 8-byte target from [RIP+0] = address right
+            // after the 6-byte JMP encoding, then jumps there.
+            self.emit_bytes(&[0xff, 0x25, 0x00, 0x00, 0x00, 0x00]);
+            self.emit_u64(target_addr);
         }
     }
 
@@ -815,6 +815,21 @@ impl Assembler {
         // Emit ModRM byte: mod=00 (indirect), reg=xmm, r/m=base
         let modrm = 0x00 | ((xmm_reg & 7) << 3) | (base_reg & 7);
         self.emit_u8(modrm);
+    }
+
+    /// Save guest R10 to an absolute address without touching the stack or flags.
+    ///
+    /// Uses XCHG RAX↔R10, MOVABS [addr],RAX, XCHG RAX↔R10.
+    /// XCHG doesn't modify flags. MOVABS uses a 64-bit absolute address,
+    /// so this works from any code cache location (no RIP-relative needed).
+    pub fn emit_save_r10_to_scratch(&mut self, scratch_r10_addr: u64) {
+        // xchg rax, r10  (2 bytes: REX.WB + 0x90+2)
+        self.emit_bytes(&[0x49, 0x92]);
+        // movabs [scratch_r10_addr], rax  (10 bytes: REX.W + 0xA3 + 8-byte addr)
+        self.emit_bytes(&[0x48, 0xA3]);
+        self.emit_u64(scratch_r10_addr);
+        // xchg rax, r10  (2 bytes: restore both registers)
+        self.emit_bytes(&[0x49, 0x92]);
     }
 
     /// Emit raw bytes

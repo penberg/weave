@@ -153,6 +153,50 @@ impl Assembler {
         self.emit_u8(modrm);
     }
 
+    /// Emits LEA dst, [base_reg + index_reg]
+    ///
+    /// This is used to build effective addresses without modifying flags.
+    pub fn emit_lea_reg_plus_reg(&mut self, dst: u8, base_reg: u8, index_reg: u8) {
+        assert!(dst < 16, "Invalid destination register: {}", dst);
+        assert!(base_reg < 16, "Invalid base register: {}", base_reg);
+        assert!(index_reg < 16, "Invalid index register: {}", index_reg);
+        assert!(
+            (index_reg & 7) != 4,
+            "RSP/R12 can't be used as SIB index register: {}",
+            index_reg
+        );
+
+        let mut rex = 0x48; // REX.W
+        if dst >= 8 {
+            rex |= 0x04; // REX.R
+        }
+        if index_reg >= 8 {
+            rex |= 0x02; // REX.X
+        }
+        if base_reg >= 8 {
+            rex |= 0x01; // REX.B
+        }
+        self.emit_u8(rex);
+        self.emit_u8(0x8D); // LEA r64, m
+
+        // Use mod=01 + disp8=0 if base is RBP/R13, since mod=00 would mean disp32-only.
+        let needs_disp8 = (base_reg & 7) == 5;
+        let modrm = if needs_disp8 {
+            0x44 | ((dst & 7) << 3)
+        } else {
+            0x04 | ((dst & 7) << 3)
+        };
+        self.emit_u8(modrm);
+
+        // SIB: scale=1, index=index_reg, base=base_reg
+        let sib = ((index_reg & 7) << 3) | (base_reg & 7);
+        self.emit_u8(sib);
+
+        if needs_disp8 {
+            self.emit_u8(0);
+        }
+    }
+
     /// Emits MOV r64, [base_reg] - load 64-bit value from memory into register
     ///
     /// # Arguments

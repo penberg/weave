@@ -127,134 +127,8 @@ fn translate_insn(
             // We intercept this and use our guest TLS base instead.
             if insn.segment_prefix() == iced_x86::Register::FS {
                 let fs_base_addr = &raw const crate::sys::linux::kernel::GUEST_FS_BASE as u64;
-                let offset = insn.memory_displacement64();
-
-                if insn.code().mnemonic() == iced_x86::Mnemonic::Mov
-                    && insn.op0_kind() == iced_x86::OpKind::Register
-                    && insn.op1_kind() == iced_x86::OpKind::Memory
-                {
-                    // mov reg, fs:[offset] -> load from guest FS base + offset
-                    let dest_reg = insn.op0_register();
-                    trace!(
-                        "TLS access: replacing mov {:?}, fs:[{}] with guest FS base load",
-                        dest_reg, offset
-                    );
-
-                    // We need a scratch register that's not the destination
-                    // Use R11 as scratch (save/restore if needed)
-                    if dest_reg == iced_x86::Register::R11 {
-                        // Destination is R11, use RAX as scratch (save/restore)
-                        block.asm.emit_push_reg64(0); // push rax
-                        block.emit_mov_reg64_imm64(iced_x86::Register::RAX, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(iced_x86::Register::RAX, iced_x86::Register::RAX);
-                        // Now RAX = guest FS base, load [rax + offset] into r11
-                        block.emit_mov_reg64_from_mem_offset(dest_reg, iced_x86::Register::RAX, offset as i32);
-                        block.asm.emit_pop_reg64(0); // pop rax
-                    } else {
-                        block.asm.emit_push_reg64(11); // push r11
-                        // Load GUEST_FS_BASE address, then load the actual FS base value
-                        block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(iced_x86::Register::R11, iced_x86::Register::R11);
-                        // Now R11 = guest FS base, load [r11 + offset] into dest
-                        block.emit_mov_reg64_from_mem_offset(dest_reg, iced_x86::Register::R11, offset as i32);
-                        block.asm.emit_pop_reg64(11); // pop r11
-                    }
-                } else if insn.code().mnemonic() == iced_x86::Mnemonic::Mov
-                    && insn.op0_kind() == iced_x86::OpKind::Memory
-                    && insn.op1_kind() == iced_x86::OpKind::Register
-                {
-                    // mov fs:[offset], reg -> store to guest FS base + offset
-                    let src_reg = insn.op1_register();
-                    trace!(
-                        "TLS store: replacing mov fs:[{}], {:?} with guest FS base store",
-                        offset, src_reg
-                    );
-
-                    block.asm.emit_push_reg64(11); // push r11
-                    block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
-                    block.emit_mov_reg64_from_mem(iced_x86::Register::R11, iced_x86::Register::R11);
-                    // Now R11 = guest FS base, store src to [r11 + offset]
-                    block.emit_mov_mem_offset_reg64(
-                        iced_x86::Register::R11,
-                        offset as i32,
-                        src_reg,
-                    );
-                    block.asm.emit_pop_reg64(11); // pop r11
-                } else if insn.op0_kind() == iced_x86::OpKind::Register
-                    && insn.op1_kind() == iced_x86::OpKind::Memory
-                {
-                    // ALU op reg, fs:[offset] (e.g., sub rax, fs:[0x28] for stack canary check)
-                    // Strategy: load TLS value into R11, do `op dest, r11`, restore R11.
-                    // POP does not modify RFLAGS, so flags from the ALU op are preserved.
-                    let dest_reg = insn.op0_register();
-                    let mnemonic = insn.code().mnemonic();
-                    trace!(
-                        "TLS ALU: replacing {:?} {:?}, fs:[{}] with guest FS base access",
-                        mnemonic, dest_reg, offset
-                    );
-
-                    // Map mnemonic to opcode for `op r64, r/m64` form
-                    let opcode: u8 = match mnemonic {
-                        iced_x86::Mnemonic::Add => 0x03,
-                        iced_x86::Mnemonic::Or => 0x0B,
-                        iced_x86::Mnemonic::Adc => 0x13,
-                        iced_x86::Mnemonic::Sbb => 0x1B,
-                        iced_x86::Mnemonic::And => 0x23,
-                        iced_x86::Mnemonic::Sub => 0x2B,
-                        iced_x86::Mnemonic::Xor => 0x33,
-                        iced_x86::Mnemonic::Cmp => 0x3B,
-                        _ => {
-                            return Err(Error::InstructionDecode(format!(
-                                "Unhandled FS-prefixed ALU instruction {:?} at 0x{:x}",
-                                mnemonic, addr
-                            )));
-                        }
-                    };
-
-                    if dest_reg == iced_x86::Register::R11 {
-                        // Destination is R11, use RAX as scratch to avoid clobbering
-                        block.asm.emit_push_reg64(0); // push rax
-                        block.emit_mov_reg64_imm64(iced_x86::Register::RAX, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(
-                            iced_x86::Register::RAX,
-                            iced_x86::Register::RAX,
-                        );
-                        block.emit_mov_reg64_from_mem_offset(
-                            iced_x86::Register::RAX,
-                            iced_x86::Register::RAX,
-                            offset as i32,
-                        );
-                        // RAX now holds the TLS value. Emit: <op> r11, rax
-                        let rex: u8 = 0x4C; // REX.WR (r11 is dest, extended)
-                        let modrm: u8 = 0xC0 | (3 << 3); // mod=11, reg=r11(3), rm=rax(0)
-                        block.asm.emit_bytes(&[rex, opcode, modrm]);
-                        block.asm.emit_pop_reg64(0); // pop rax
-                    } else {
-                        block.asm.emit_push_reg64(11); // push r11
-                        block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(
-                            iced_x86::Register::R11,
-                            iced_x86::Register::R11,
-                        );
-                        block.emit_mov_reg64_from_mem_offset(
-                            iced_x86::Register::R11,
-                            iced_x86::Register::R11,
-                            offset as i32,
-                        );
-                        // R11 now holds the TLS value. Emit: <op> dest_reg, r11
-                        let dest_num = register_to_number(dest_reg);
-                        let rex =
-                            0x49 | if dest_num >= 8 { 0x04 } else { 0x00 }; // REX.WB (+ REX.R if dest extended)
-                        let modrm = 0xC3 | ((dest_num & 7) << 3); // mod=11, rm=011 (r11), reg=dest
-                        block.asm.emit_bytes(&[rex, opcode, modrm]);
-                        block.asm.emit_pop_reg64(11); // pop r11
-                    }
-                } else {
-                    return Err(Error::InstructionDecode(format!(
-                        "Unhandled FS-prefixed instruction at 0x{:x}: {:?}",
-                        addr, insn
-                    )));
-                }
+                trace!("TLS access: rewriting FS-relative instruction {:?}", insn);
+                emit_generic_fs_relative(block, &insn, fs_base_addr, addr)?;
                 return Ok(true);
             }
 
@@ -613,6 +487,85 @@ fn emit_generic_rip_relative(
             addr, e
         ))),
     }
+}
+
+/// Generic fallback for FS-relative instructions: compute the guest TLS address
+/// in a scratch register, then re-encode the original instruction against it.
+fn emit_generic_fs_relative(
+    block: &mut TranslatedBlockBuilder,
+    insn: &Instruction,
+    fs_base_addr: u64,
+    addr: u64,
+) -> Result<()> {
+    use iced_x86::Register;
+
+    let scratch = choose_fs_scratch_register(insn).ok_or_else(|| {
+        Error::InstructionDecode(format!(
+            "Couldn't find scratch register for FS-relative instruction at 0x{:x}: {:?}",
+            addr, insn
+        ))
+    })?;
+    let scratch_num = register_to_number(scratch);
+
+    let memory_base = insn.memory_base();
+    let mut new_insn = *insn;
+    new_insn.set_segment_prefix(Register::None);
+    new_insn.set_memory_base(scratch);
+
+    block.asm.emit_push_reg64(scratch_num);
+    block.emit_mov_reg64_imm64(scratch, fs_base_addr);
+    block.emit_mov_reg64_from_mem(scratch, scratch);
+
+    if memory_base != Register::None {
+        let base_num = register_to_number(memory_base);
+        if (base_num & 7) != 4 {
+            block.asm.emit_lea_reg_plus_reg(scratch_num, scratch_num, base_num);
+        } else {
+            block.asm.emit_lea_reg_plus_reg(scratch_num, base_num, scratch_num);
+        }
+    }
+
+    let mut encoder = Encoder::new(64);
+    match encoder.encode(&new_insn, 0) {
+        Ok(_) => {
+            let encoded = encoder.take_buffer();
+            block.emit_bytes(&encoded);
+            block.asm.emit_pop_reg64(scratch_num);
+            Ok(())
+        }
+        Err(e) => Err(Error::InstructionDecode(format!(
+            "Failed to re-encode FS-relative instruction at 0x{:x}: {}",
+            addr, e
+        ))),
+    }
+}
+
+fn choose_fs_scratch_register(insn: &Instruction) -> Option<iced_x86::Register> {
+    use iced_x86::{OpKind, Register};
+
+    let mut used = Vec::new();
+    for i in 0..insn.op_count() {
+        if insn.op_kind(i) == OpKind::Register {
+            used.push(insn.op_register(i));
+        }
+    }
+
+    if insn.memory_base() != Register::None {
+        used.push(insn.memory_base());
+    }
+    if insn.memory_index() != Register::None {
+        used.push(insn.memory_index());
+    }
+
+    [
+        Register::R11,
+        Register::R10,
+        Register::R15,
+        Register::R14,
+        Register::RAX,
+    ]
+    .into_iter()
+    .find(|candidate| !used.contains(candidate))
 }
 
 /// Convert an iced-x86 Register to a register number (0-15)

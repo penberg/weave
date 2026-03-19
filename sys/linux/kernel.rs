@@ -323,9 +323,10 @@ fn setup_tls(elf: &Elf) {
     if let Some(phdr) = tls_phdr {
         if tls_filesz > 0 {
             let src = (phdr.p_vaddr + ELF_BASE_ADDRESS) as *const u8;
-            // TLS data goes at the start of the TLS block
-            // In variant II, TLS variables are at negative offsets from TCB
-            let dst = unsafe { tcb_addr.sub(tls_memsz) };
+            // TLS data goes at the start of the aligned TLS block.
+            // In variant II, the TCB points just past the entire aligned block,
+            // so variable offsets are computed from `tls_block_size`, not `tls_memsz`.
+            let dst = tls_base;
             unsafe {
                 std::ptr::copy_nonoverlapping(src, dst, tls_filesz);
             }
@@ -334,7 +335,7 @@ fn setup_tls(elf: &Elf) {
 
     // Zero the BSS portion (filesz..memsz is zero-initialized)
     if tls_memsz > tls_filesz {
-        let bss_dst = unsafe { tcb_addr.sub(tls_memsz).add(tls_filesz) };
+        let bss_dst = unsafe { tls_base.add(tls_filesz) };
         unsafe {
             std::ptr::write_bytes(bss_dst, 0, tls_memsz - tls_filesz);
         }

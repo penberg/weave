@@ -5,3 +5,15 @@ testing/darwin-arm64/branch-pac
 testing/darwin-arm64/branch-cbz
 testing/darwin-arm64/branch-nzcv
 testing/darwin-arm64/ldr-literal
+testing/abi/varargs_stress
+testing/abi/variadic_bridge
+testing/conformance/
+testing/linux/arch_prctl
+testing/linux/getrandom
+testing/linux/prctl
+testing/linux/prlimit64
+testing/linux/sched_getaffinity
+testing/linux/sched_yield
+testing/linux/set_robust_list
+testing/linux/set_tid_address
+testing/linux/sysinfo

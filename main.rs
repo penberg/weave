@@ -47,7 +47,9 @@ fn main() {
     for arg in &opts.program_args {
         argv.push(arg);
     }
-    sys::execve(&opts.program, &argv);
+    let Err(e) = sys::execve(&opts.program, &argv);
+    eprintln!("weave: {}", e);
+    exit(1);
 }
 
 fn register_signal_handlers() {

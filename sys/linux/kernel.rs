@@ -64,31 +64,20 @@ impl Task {
     ///
     /// This function loads an ELF binary, sets up the task state,
     /// and begins execution. It never returns.
-    pub fn execve(&mut self, path: &str, argv: &[&str]) -> ! {
+    pub fn execve(
+        &mut self,
+        path: &str,
+        argv: &[&str],
+    ) -> Result<std::convert::Infallible, crate::Error> {
         // Open and parse the ELF file
-        let file = match MappedFile::open(path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to open {}: {}", path, e);
-                std::process::exit(1);
-            }
-        };
-        let elf = match load_elf(file) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("Failed to load ELF: {}", e);
-                std::process::exit(1);
-            }
-        };
+        let file = MappedFile::open(path).map_err(|e| exec_error(path, e))?;
+        let elf = load_elf(file).map_err(|e| exec_error(path, e))?;
 
         // Check if this is a dynamically linked binary
-        let parsed_elf = match Elf::parse(elf.file.data) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("Failed to parse ELF: {}", e);
-                std::process::exit(1);
-            }
-        };
+        let parsed_elf = Elf::parse(elf.file.data).map_err(|e| crate::Error::Exec {
+            path: path.to_string(),
+            message: e.to_string(),
+        })?;
         let is_dynamic = parsed_elf.dynamic.is_some();
 
         let (entry_point, lib_text_bounds) = if is_dynamic {
@@ -96,16 +85,18 @@ impl Task {
             let mut linker = DynamicLinker::new();
 
             // Load dependencies (including libc) into guest address space
-            if let Err(e) = linker.load_executable(&elf) {
-                eprintln!("Failed to load dependencies: {}", e);
-                std::process::exit(1);
-            }
+            linker
+                .load_executable(&elf)
+                .map_err(|e| crate::Error::Exec {
+                    path: path.to_string(),
+                    message: format!("failed to load dependencies: {}", e),
+                })?;
 
             // Perform relocations
-            if let Err(e) = linker.relocate(&elf) {
-                eprintln!("Failed to relocate: {}", e);
-                std::process::exit(1);
-            }
+            linker.relocate(&elf).map_err(|e| crate::Error::Exec {
+                path: path.to_string(),
+                message: format!("failed to relocate: {}", e),
+            })?;
 
             // Get library text bounds for the dispatcher
             let lib_bounds = linker.get_library_text_bounds();
@@ -261,7 +252,7 @@ impl Task {
 }
 
 /// Execute a file
-pub fn execve(path: &str, argv: &[&str]) -> ! {
+pub fn execve(path: &str, argv: &[&str]) -> Result<std::convert::Infallible, crate::Error> {
     let task = unsafe { &mut *get_current_task() };
     task.execve(path, argv)
 }
@@ -377,5 +368,16 @@ pub fn syscall(state: &mut CpuState, _syscall_insn: u16) {
         _ => {
             todo!("unsupported linux syscall: {}", syscall_num);
         }
+    }
+}
+
+fn exec_error(path: &str, err: crate::Error) -> crate::Error {
+    let message = match &err {
+        crate::Error::Io(io_err) => crate::io_error_message(io_err),
+        _ => err.to_string(),
+    };
+    crate::Error::Exec {
+        path: path.to_string(),
+        message,
     }
 }

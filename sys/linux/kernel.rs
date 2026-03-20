@@ -23,6 +23,8 @@ pub fn get_current_task() -> *mut Task {
     CURRENT_TASK.with(|t| t.get().expect("no current task set"))
 }
 
+const GUEST_AUXV_CAPACITY: usize = 16;
+
 pub struct TaskBuilder {
     print_code: bool,
 }
@@ -191,8 +193,49 @@ impl Task {
             debug!("  argv[{}] at 0x{:x}: {:?}", arg_addrs.len() - 1, sp, arg);
         }
 
+        // The initial stack exposes the executable path separately via AT_EXECFN.
+        sp -= (path.len() + 1) as u64;
+        unsafe {
+            std::ptr::copy_nonoverlapping(path.as_ptr(), sp as *mut u8, path.len());
+            *((sp + path.len() as u64) as *mut u8) = 0;
+        }
+        let execfn_ptr = sp;
+
+        // AT_RANDOM points to 16 bytes of process entropy on the initial stack.
+        sp -= 16;
+        let random_ptr = sp;
+        let random = unsafe { std::slice::from_raw_parts_mut(random_ptr as *mut u8, 16) };
+        crate::runtime::random::fill_bytes(random);
+
         // Align stack to 16 bytes
         sp &= !15;
+
+        let phdr_addr = ELF_BASE_ADDRESS + parsed_elf.header.e_phoff;
+        let auxv_entries = [
+            (libc::AT_PHDR as u64, phdr_addr),
+            (libc::AT_PHENT as u64, parsed_elf.header.e_phentsize as u64),
+            (libc::AT_PHNUM as u64, parsed_elf.header.e_phnum as u64),
+            (libc::AT_PAGESZ as u64, unsafe {
+                libc::sysconf(libc::_SC_PAGE_SIZE) as u64
+            }),
+            (libc::AT_ENTRY as u64, entry_point),
+            (libc::AT_BASE as u64, 0),
+            (libc::AT_RANDOM as u64, random_ptr),
+            (libc::AT_EXECFN as u64, execfn_ptr),
+            (libc::AT_NULL as u64, 0),
+        ];
+        set_guest_auxv(&auxv_entries);
+
+        for &(kind, value) in auxv_entries.iter().rev() {
+            sp -= 8;
+            unsafe {
+                *(sp as *mut u64) = value;
+            }
+            sp -= 8;
+            unsafe {
+                *(sp as *mut u64) = kind;
+            }
+        }
 
         // Push NULL terminator for envp array (no environment variables)
         sp -= 8;
@@ -359,6 +402,8 @@ fn setup_tls(elf: &Elf) {
 /// Guest FS base address (TLS pointer), used by the translator to replace fs:0 reads.
 pub static mut GUEST_FS_BASE: u64 = 0;
 pub static mut GUEST_ERRNO_PTR: u64 = 0;
+pub static mut GUEST_AUXV: [(u64, u64); GUEST_AUXV_CAPACITY] = [(0, 0); GUEST_AUXV_CAPACITY];
+pub static mut GUEST_AUXV_LEN: usize = 0;
 
 pub fn set_guest_errno(errno: i32) {
     let errno_ptr = unsafe { GUEST_ERRNO_PTR as *mut i32 };
@@ -371,6 +416,23 @@ pub fn set_guest_errno(errno: i32) {
 
 pub fn get_guest_errno_ptr() -> *mut i32 {
     unsafe { GUEST_ERRNO_PTR as *mut i32 }
+}
+
+pub fn set_guest_auxv(entries: &[(u64, u64)]) {
+    assert!(entries.len() <= GUEST_AUXV_CAPACITY);
+    unsafe {
+        GUEST_AUXV_LEN = entries.len();
+        GUEST_AUXV[..entries.len()].copy_from_slice(entries);
+    }
+}
+
+pub fn get_guest_auxv(kind: u64) -> Option<u64> {
+    unsafe {
+        GUEST_AUXV[..GUEST_AUXV_LEN]
+            .iter()
+            .find(|(entry_kind, _)| *entry_kind == kind)
+            .map(|(_, value)| *value)
+    }
 }
 
 const SYSCALL_EXIT: u64 = 60;

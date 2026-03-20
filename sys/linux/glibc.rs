@@ -88,3 +88,14 @@ pub extern "C" fn cxa_finalize(_dso_handle: *const ()) {
 pub extern "C" fn errno_location() -> *mut i32 {
     crate::sys::linux::kernel::get_guest_errno_ptr()
 }
+
+/// Implementation of getauxval backed by the guest's synthetic auxv.
+pub extern "C" fn getauxval(kind: libc::c_ulong) -> libc::c_ulong {
+    match crate::sys::linux::kernel::get_guest_auxv(kind) {
+        Some(value) => value as libc::c_ulong,
+        None => {
+            crate::sys::linux::kernel::set_guest_errno(libc::ENOENT);
+            0
+        }
+    }
+}

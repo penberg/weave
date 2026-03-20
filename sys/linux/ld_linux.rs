@@ -79,6 +79,8 @@ impl DynamicLinker {
             "__errno_location".to_string(),
             glibc::errno_location as *const () as u64,
         );
+        self.symbols
+            .insert("getauxval".to_string(), glibc::getauxval as *const () as u64);
     }
 
     /// Load an executable and resolve its dependencies

@@ -10,6 +10,7 @@ TESTS += set_robust_list
 TESTS += sched_yield
 TESTS += exit_status
 TESTS += syscall_errno
+TESTS += auxv
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

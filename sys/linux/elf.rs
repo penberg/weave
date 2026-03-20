@@ -160,7 +160,7 @@ fn load_segments(elf: &ElfFile) {
 
         // Then, overlay the file-backed portion (p_filesz only, not p_memsz).
         let file_map_size = segment.filesize + page_offset;
-        if file_map_size > 0 {
+        if segment.filesize > 0 {
             let data = unsafe {
                 libc::mmap(
                     segment.addr as *mut libc::c_void,

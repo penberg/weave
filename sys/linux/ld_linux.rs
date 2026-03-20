@@ -75,6 +75,10 @@ impl DynamicLinker {
             "__cxa_finalize".to_string(),
             glibc::cxa_finalize as *const () as u64,
         );
+        self.symbols.insert(
+            "__errno_location".to_string(),
+            glibc::errno_location as *const () as u64,
+        );
     }
 
     /// Load an executable and resolve its dependencies

@@ -35,6 +35,7 @@ pub fn syscall(
     arg3: u64,
     arg4: u64,
     _arg5: u64,
+    _arg6: u64,
 ) -> libc::c_long {
     trace!("syscall wrapper: number={}", number);
     match number as i64 {
@@ -59,7 +60,7 @@ pub fn syscall(
                         arg1, val, current
                     );
                     if current != val {
-                        return -libc::EAGAIN as libc::c_long;
+                        return syscall_error(libc::EAGAIN);
                     }
                     unsafe { std::ptr::write_volatile(addr, 0) };
                     0
@@ -139,7 +140,7 @@ pub fn syscall(
                     }
                     0
                 }
-                _ => -libc::EINVAL as libc::c_long,
+                _ => syscall_error(libc::EINVAL),
             }
         }
         SYS_ARCH_PRCTL => {
@@ -171,6 +172,9 @@ pub fn syscall(
                             unsafe {
                                 *(tcb as *mut u64) = addr;
                                 super::kernel::GUEST_FS_BASE = addr;
+                                super::kernel::GUEST_ERRNO_PTR =
+                                    (tcb as *mut u8).add(0x30) as u64;
+                                *(super::kernel::GUEST_ERRNO_PTR as *mut i32) = 0;
                             }
                             fs_base = addr;
                         }
@@ -178,7 +182,7 @@ pub fn syscall(
                     unsafe { *ptr = fs_base };
                     0
                 }
-                _ => -libc::EINVAL as libc::c_long,
+                _ => syscall_error(libc::EINVAL),
             }
         }
         SYS_SET_TID_ADDRESS => 1000, // deterministic TID
@@ -195,4 +199,9 @@ pub fn syscall(
             todo!("unsupported syscall via libc wrapper: {}", number);
         }
     }
+}
+
+fn syscall_error(errno: i32) -> libc::c_long {
+    super::kernel::set_guest_errno(errno);
+    -1
 }

@@ -83,3 +83,8 @@ pub extern "C" fn itm_stub() {
 pub extern "C" fn cxa_finalize(_dso_handle: *const ()) {
     debug!("__cxa_finalize called (no-op)");
 }
+
+/// Implementation of __errno_location for guest code.
+pub extern "C" fn errno_location() -> *mut i32 {
+    crate::sys::linux::kernel::get_guest_errno_ptr()
+}

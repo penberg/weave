@@ -9,6 +9,7 @@ TESTS += set_tid_address
 TESTS += set_robust_list
 TESTS += sched_yield
 TESTS += exit_status
+TESTS += syscall_errno
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

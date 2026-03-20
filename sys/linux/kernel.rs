@@ -6,6 +6,7 @@ use crate::{
 };
 use goblin::elf::Elf;
 use std::cell::Cell;
+use std::mem::size_of;
 use tracing::{debug, trace};
 
 thread_local! {
@@ -288,8 +289,9 @@ fn setup_tls(elf: &Elf) {
     // The TCB needs at least 0x30 bytes for the self-pointer (offset 0)
     // and stack canary (offset 0x28).
     let tcb_size = 0x30;
+    let errno_size = size_of::<i32>();
     let tls_block_size = (tls_memsz + tls_align - 1) & !(tls_align - 1);
-    let total_size = tls_block_size + tcb_size;
+    let total_size = tls_block_size + tcb_size + errno_size;
 
     // Allocate the TLS area
     let tls_area = unsafe {
@@ -336,6 +338,12 @@ fn setup_tls(elf: &Elf) {
         *(tcb_addr as *mut u64) = tcb_addr as u64;
     }
 
+    let errno_ptr = unsafe { tcb_addr.add(tcb_size) as *mut i32 };
+    unsafe {
+        *errno_ptr = 0;
+        GUEST_ERRNO_PTR = errno_ptr as u64;
+    }
+
     // Store the guest TLS base in a global so the translator can emit code
     // that loads from it instead of using fs:0 (which would access the host TLS).
     unsafe {
@@ -350,6 +358,20 @@ fn setup_tls(elf: &Elf) {
 
 /// Guest FS base address (TLS pointer), used by the translator to replace fs:0 reads.
 pub static mut GUEST_FS_BASE: u64 = 0;
+pub static mut GUEST_ERRNO_PTR: u64 = 0;
+
+pub fn set_guest_errno(errno: i32) {
+    let errno_ptr = unsafe { GUEST_ERRNO_PTR as *mut i32 };
+    if !errno_ptr.is_null() {
+        unsafe {
+            *errno_ptr = errno;
+        }
+    }
+}
+
+pub fn get_guest_errno_ptr() -> *mut i32 {
+    unsafe { GUEST_ERRNO_PTR as *mut i32 }
+}
 
 const SYSCALL_EXIT: u64 = 60;
 

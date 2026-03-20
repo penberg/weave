@@ -181,7 +181,10 @@ impl DynamicLinker {
                     }
                 }
                 _ => {
-                    debug!("Unsupported relocation type: {}", reloc.r_type);
+                    return Err(Error::DynamicLinker(format!(
+                        "unsupported relocation type: {}",
+                        reloc.r_type
+                    )));
                 }
             }
         }

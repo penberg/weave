@@ -1,4 +1,5 @@
 use libc::{SIGBUS, SIGFPE, SIGILL, SIGSEGV};
+use std::path::Path;
 use std::{env, process::exit};
 use tracing_subscriber::EnvFilter;
 
@@ -31,7 +32,8 @@ fn main() {
         eprintln!("usage: weave [options] -- <program> [arguments...]");
         exit(1);
     }
-    let opts = parse_opts(&args);
+    let mut opts = parse_opts(&args);
+    opts.program = resolve_program(&opts.program);
 
     random::init(opts.seed);
     time::init();
@@ -108,6 +110,24 @@ fn parse_opts(args: &[String]) -> Opts {
         program,
         program_args,
     }
+}
+
+/// Resolve a program name to a full path by searching PATH, similar to execvp(3).
+/// If the program already contains a '/', it is returned as-is.
+fn resolve_program(program: &str) -> String {
+    if program.contains('/') {
+        return program.to_string();
+    }
+    if let Ok(path_var) = env::var("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = Path::new(dir).join(program);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    eprintln!("error: program '{}' not found in PATH", program);
+    exit(1);
 }
 
 fn setup_logging() {

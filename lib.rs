@@ -33,14 +33,30 @@ pub enum Error {
     #[error("object format error: {0}")]
     ObjectFormat(#[from] ObjectFormatError),
 
-    #[error("I/O error: {0}")]
+    #[error("{0}")]
     Io(#[from] std::io::Error),
+
+    #[error("{path}: {message}")]
+    Exec { path: String, message: String },
 
     #[error("dynamic linker error: {0}")]
     DynamicLinker(String),
 
     #[error("memory mapping error: {0}")]
     MemoryMapping(String),
+}
+
+/// Convert an IO error to a human-readable message using strerror when possible.
+pub fn io_error_message(err: &std::io::Error) -> String {
+    if let Some(errno) = err.raw_os_error() {
+        unsafe {
+            std::ffi::CStr::from_ptr(::libc::strerror(errno))
+                .to_string_lossy()
+                .into_owned()
+        }
+    } else {
+        err.to_string()
+    }
 }
 
 /// Error type for object file format parsing and loading
@@ -57,7 +73,10 @@ pub enum ObjectFormatError {
     MachError(#[from] sys::darwin::dyld::MachError),
 
     #[error("cannot run binary for {binary_arch} architecture on {host_arch} host")]
-    UnsupportedArch { binary_arch: String, host_arch: String },
+    UnsupportedArch {
+        binary_arch: String,
+        host_arch: String,
+    },
 
     #[error("text segment is missing")]
     MissingTextSegment,

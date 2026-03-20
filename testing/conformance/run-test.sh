@@ -8,7 +8,7 @@
 BINARY="$1"
 SOURCE="$2"
 SUITE="$3"
-WEAVE="../../target/debug/weave"
+WEAVE="../../../target/debug/weave"
 
 # Extract CHECK lines from source (supports // and # comments)
 EXPECTED=$(grep -E '^[[:space:]]*(//|#)[[:space:]]*CHECK:' "$SOURCE" 2>/dev/null | \

@@ -24,9 +24,8 @@ impl DynamicLinker {
         let libs = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
         for lib in &libs {
             let lib_path = std::ffi::CString::new(*lib).unwrap();
-            let handle = unsafe {
-                libc::dlopen(lib_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL)
-            };
+            let handle =
+                unsafe { libc::dlopen(lib_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
             if !handle.is_null() {
                 debug!("Opened {} for symbol resolution", lib);
                 lib_handles.push(handle);
@@ -107,9 +106,7 @@ impl DynamicLinker {
         // 3. Fall back to dlsym from host libraries
         let c_name = std::ffi::CString::new(name).ok()?;
         for &handle in &self.lib_handles {
-            let addr = unsafe {
-                libc::dlsym(handle, c_name.as_ptr())
-            };
+            let addr = unsafe { libc::dlsym(handle, c_name.as_ptr()) };
             if !addr.is_null() {
                 debug!("Resolved {} via dlsym to 0x{:x}", name, addr as u64);
                 return Some(addr as u64);
@@ -144,10 +141,7 @@ impl DynamicLinker {
                     if let Some(sym) = elf.dynsyms.get(sym_idx) {
                         if let Some(sym_name) = elf.dynstrtab.get_at(sym.st_name) {
                             let sym_addr = self.resolve_symbol(sym_name).ok_or_else(|| {
-                                Error::DynamicLinker(format!(
-                                    "Unresolved symbol: {}",
-                                    sym_name
-                                ))
+                                Error::DynamicLinker(format!("Unresolved symbol: {}", sym_name))
                             })?;
 
                             let reloc_addr = (reloc.r_offset
@@ -172,8 +166,7 @@ impl DynamicLinker {
                                 ))
                             })?;
 
-                            let dst = (reloc.r_offset
-                                + crate::sys::linux::elf::ELF_BASE_ADDRESS)
+                            let dst = (reloc.r_offset + crate::sys::linux::elf::ELF_BASE_ADDRESS)
                                 as *mut u8;
                             let size = sym.st_size as usize;
 
@@ -182,11 +175,7 @@ impl DynamicLinker {
                                 sym_name, size, sym_addr, dst
                             );
                             unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    sym_addr as *const u8,
-                                    dst,
-                                    size,
-                                );
+                                std::ptr::copy_nonoverlapping(sym_addr as *const u8, dst, size);
                             }
                         }
                     }

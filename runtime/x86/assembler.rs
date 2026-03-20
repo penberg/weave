@@ -109,7 +109,6 @@ impl Assembler {
         self.emit_u8(0xd0 | (reg & 0x7)); // ModRM: 11 010 reg
     }
 
-
     /// Emits a PUSH instruction for 64-bit register
     /// PUSH r64
     pub fn emit_push_reg64(&mut self, reg: u8) {

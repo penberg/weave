@@ -62,10 +62,15 @@ impl Task {
     ///
     /// This function loads a Mach-O binary, sets up the task state,
     /// and begins execution. It never returns.
-    pub fn execve(&mut self, path: &str, argv: &[&str]) -> Result<std::convert::Infallible, crate::Error> {
+    pub fn execve(
+        &mut self,
+        path: &str,
+        argv: &[&str],
+    ) -> Result<std::convert::Infallible, crate::Error> {
         // Open and parse the Mach-O file
         let file = MappedFile::open(path).map_err(|e| exec_error(path, e))?;
-        let macho = load_machfile(file).map_err(|e| exec_error(path, crate::Error::ObjectFormat(e)))?;
+        let macho =
+            load_machfile(file).map_err(|e| exec_error(path, crate::Error::ObjectFormat(e)))?;
 
         // Find executable sections bounds (include __text, __stubs, etc.)
         let executable_sections: Vec<_> = macho

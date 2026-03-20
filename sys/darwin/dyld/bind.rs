@@ -4,8 +4,8 @@
 //! which encode symbol binding and pointer rebase information in a compact
 //! opcode-based format (the "compressed" format in Apple's terminology).
 
-use super::exports;
 use super::ChainedFixup;
+use super::exports;
 use tracing::{debug, trace, warn};
 
 /// A pointer rebase entry from LC_DYLD_INFO_ONLY rebase opcodes.
@@ -229,9 +229,7 @@ pub fn parse_dyld_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, String> {
                 if !symbol_name.is_empty() {
                     trace!(
                         "Creating fixup for symbol: {} (segment={}, offset=0x{:x})",
-                        symbol_name,
-                        segment_index,
-                        segment_offset
+                        symbol_name, segment_index, segment_offset
                     );
                     fixups.push(ChainedFixup {
                         symbol_name: symbol_name.clone(),
@@ -389,9 +387,7 @@ pub fn parse_dyld_lazy_bind_info(data: &[u8]) -> Result<Vec<ChainedFixup>, Strin
                     if !symbol_name.is_empty() {
                         trace!(
                             "Creating lazy fixup for symbol: {} (segment={}, offset=0x{:x})",
-                            symbol_name,
-                            segment_index,
-                            segment_offset
+                            symbol_name, segment_index, segment_offset
                         );
                         fixups.push(ChainedFixup {
                             symbol_name: symbol_name.clone(),

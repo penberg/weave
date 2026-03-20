@@ -6,14 +6,17 @@
 //! next-pointer deltas forming a chain through each page.
 
 use super::macho::*;
-use super::{ChainedFixup, MachO, Segment, MACHO_BASE_ADDRESS};
+use super::{ChainedFixup, MACHO_BASE_ADDRESS, MachO, Segment};
 use tracing::{debug, trace, warn};
 
 /// Parse chained fixups imports from LC_DYLD_CHAINED_FIXUPS data.
 ///
 /// This extracts symbol binding information from the chained fixups header.
 /// The actual pointer chain walking is done by `apply_chained_rebases`.
-pub fn parse_chained_fixups(data: &[u8], segments: &[Segment]) -> Result<Vec<ChainedFixup>, String> {
+pub fn parse_chained_fixups(
+    data: &[u8],
+    segments: &[Segment],
+) -> Result<Vec<ChainedFixup>, String> {
     if data.len() < std::mem::size_of::<dyld_chained_fixups_header>() {
         return Err("Chained fixups data too small".to_string());
     }
@@ -165,7 +168,7 @@ pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
 
         let seg_starts = unsafe {
             std::ptr::read(
-                data.as_ptr().add(seg_starts_pos) as *const dyld_chained_starts_in_segment,
+                data.as_ptr().add(seg_starts_pos) as *const dyld_chained_starts_in_segment
             )
         };
 
@@ -212,10 +215,7 @@ pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
 
             trace!(
                 "  Page {}: page_start=0x{:x}, page_base=0x{:x}, chain_start=0x{:x}",
-                page_idx,
-                page_start,
-                page_base,
-                ptr_addr
+                page_idx, page_start, page_base, ptr_addr
             );
 
             // Walk the chain
@@ -223,8 +223,7 @@ pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
                 let ptr_value = unsafe { std::ptr::read(ptr_addr as *const u64) };
                 trace!(
                     "    Chain entry at 0x{:x}: raw_value=0x{:x}",
-                    ptr_addr,
-                    ptr_value
+                    ptr_addr, ptr_value
                 );
 
                 // Decode based on pointer format
@@ -315,9 +314,7 @@ pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
 
                 trace!(
                     "      is_bind={}, target=0x{:x}, next_delta={}",
-                    is_bind,
-                    target,
-                    next_delta
+                    is_bind, target, next_delta
                 );
 
                 if !is_bind && target != 0 {
@@ -335,9 +332,7 @@ pub fn apply_chained_rebases(macho: &MachO, segment_slide: i64) {
                     }
                     trace!(
                         "Chained rebase at 0x{:x}: 0x{:x} -> 0x{:x}",
-                        ptr_addr,
-                        target,
-                        new_value
+                        ptr_addr, target, new_value
                     );
                     total_rebases += 1;
                 }

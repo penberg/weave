@@ -146,17 +146,31 @@ fn translate_insn(
                         // Destination is R11, use RAX as scratch (save/restore)
                         block.asm.emit_push_reg64(0); // push rax
                         block.emit_mov_reg64_imm64(iced_x86::Register::RAX, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(iced_x86::Register::RAX, iced_x86::Register::RAX);
+                        block.emit_mov_reg64_from_mem(
+                            iced_x86::Register::RAX,
+                            iced_x86::Register::RAX,
+                        );
                         // Now RAX = guest FS base, load [rax + offset] into r11
-                        block.emit_mov_reg64_from_mem_offset(dest_reg, iced_x86::Register::RAX, offset as i32);
+                        block.emit_mov_reg64_from_mem_offset(
+                            dest_reg,
+                            iced_x86::Register::RAX,
+                            offset as i32,
+                        );
                         block.asm.emit_pop_reg64(0); // pop rax
                     } else {
                         block.asm.emit_push_reg64(11); // push r11
                         // Load GUEST_FS_BASE address, then load the actual FS base value
                         block.emit_mov_reg64_imm64(iced_x86::Register::R11, fs_base_addr);
-                        block.emit_mov_reg64_from_mem(iced_x86::Register::R11, iced_x86::Register::R11);
+                        block.emit_mov_reg64_from_mem(
+                            iced_x86::Register::R11,
+                            iced_x86::Register::R11,
+                        );
                         // Now R11 = guest FS base, load [r11 + offset] into dest
-                        block.emit_mov_reg64_from_mem_offset(dest_reg, iced_x86::Register::R11, offset as i32);
+                        block.emit_mov_reg64_from_mem_offset(
+                            dest_reg,
+                            iced_x86::Register::R11,
+                            offset as i32,
+                        );
                         block.asm.emit_pop_reg64(11); // pop r11
                     }
                 } else if insn.code().mnemonic() == iced_x86::Mnemonic::Mov
@@ -243,8 +257,7 @@ fn translate_insn(
                         );
                         // R11 now holds the TLS value. Emit: <op> dest_reg, r11
                         let dest_num = register_to_number(dest_reg);
-                        let rex =
-                            0x49 | if dest_num >= 8 { 0x04 } else { 0x00 }; // REX.WB (+ REX.R if dest extended)
+                        let rex = 0x49 | if dest_num >= 8 { 0x04 } else { 0x00 }; // REX.WB (+ REX.R if dest extended)
                         let modrm = 0xC3 | ((dest_num & 7) << 3); // mod=11, rm=011 (r11), reg=dest
                         block.asm.emit_bytes(&[rex, opcode, modrm]);
                         block.asm.emit_pop_reg64(11); // pop r11
@@ -761,7 +774,8 @@ impl TranslatedBlockBuilder {
     ) {
         let dst_num = register_to_number(dst);
         let base_num = register_to_number(base_reg);
-        self.asm.emit_mov_reg64_from_mem_offset(dst_num, base_num, offset);
+        self.asm
+            .emit_mov_reg64_from_mem_offset(dst_num, base_num, offset);
     }
 
     /// Emit MOV [base_reg + offset], src instruction
@@ -773,7 +787,8 @@ impl TranslatedBlockBuilder {
     ) {
         let base_num = register_to_number(base_reg);
         let src_num = register_to_number(src);
-        self.asm.emit_mov_mem_offset_from_reg64(base_num, offset, src_num);
+        self.asm
+            .emit_mov_mem_offset_from_reg64(base_num, offset, src_num);
     }
 
     /// Emit MOVSD xmm, [reg] instruction

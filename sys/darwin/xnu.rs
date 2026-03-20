@@ -6,6 +6,17 @@ use crate::{
 use std::cell::Cell;
 use tracing::{debug, trace};
 
+fn exec_error(path: &str, err: crate::Error) -> crate::Error {
+    let message = match &err {
+        crate::Error::Io(io_err) => crate::io_error_message(io_err),
+        _ => err.to_string(),
+    };
+    crate::Error::Exec {
+        path: path.to_string(),
+        message,
+    }
+}
+
 thread_local! {
     static CURRENT_TASK: Cell<Option<*mut Task>> = const { Cell::new(None) };
 }
@@ -62,10 +73,10 @@ impl Task {
     ///
     /// This function loads a Mach-O binary, sets up the task state,
     /// and begins execution. It never returns.
-    pub fn execve(&mut self, path: &str, argv: &[&str]) -> ! {
+    pub fn execve(&mut self, path: &str, argv: &[&str]) -> Result<std::convert::Infallible, crate::Error> {
         // Open and parse the Mach-O file
-        let file = MappedFile::open(path).expect("failed to open file");
-        let macho = load_machfile(file).expect("failed to parse Mach-O");
+        let file = MappedFile::open(path).map_err(|e| exec_error(path, e))?;
+        let macho = load_machfile(file).map_err(|e| exec_error(path, e))?;
 
         // Find executable sections bounds (include __text, __stubs, etc.)
         let executable_sections: Vec<_> = macho
@@ -115,7 +126,9 @@ impl Task {
             )
         };
         if stack_ptr == libc::MAP_FAILED {
-            panic!("Failed to allocate guest stack");
+            return Err(crate::Error::MemoryMapping(
+                "failed to allocate guest stack".to_string(),
+            ));
         }
         let stack_base = stack_ptr as u64;
         debug!(
@@ -207,7 +220,7 @@ impl Task {
 ///
 /// This function loads a Mach-O binary, processes dynamic linking requirements, sets up the
 /// task state, and begins execution. It never returns.
-pub fn execve(path: &str, argv: &[&str]) -> ! {
+pub fn execve(path: &str, argv: &[&str]) -> Result<std::convert::Infallible, crate::Error> {
     let task = unsafe { &mut *get_current_task() };
     task.execve(path, argv)
 }

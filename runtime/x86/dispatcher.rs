@@ -38,7 +38,7 @@ pub unsafe extern "C" fn dispatcher(
     saved_rsi: u64,
     saved_rbx: u64,
     saved_rdi: u64,
-    saved_r11: u64,
+    saved_rax: u64,
 ) -> usize {
     let ctx = runtime::get_current_context();
 
@@ -46,23 +46,27 @@ pub unsafe extern "C" fn dispatcher(
 
     let target_addr = target_addr as u64;
 
-    // Special case: if target is 0, the program returned from main()
-    // Exit with code 0
+    // Special case: if target is 0, the program returned from main().
+    // Preserve main()'s return value from RAX as the process exit status.
     if target_addr == 0 {
-        trace!("Program returned from main(), exiting with code 0");
-        std::process::exit(0);
+        let exit_code = saved_rax as i32;
+        trace!(
+            "Program returned from main(), exiting with code {}",
+            exit_code
+        );
+        std::process::exit(exit_code);
     }
 
     let is_guest = target_addr >= ctx.text_start && target_addr < ctx.text_end;
 
     trace!(
-        "Dispatching to 0x{:016x} ({}) saved_rdi=0x{:016x} saved_rsi=0x{:016x} saved_rbx=0x{:016x} saved_r11=0x{:016x}",
+        "Dispatching to 0x{:016x} ({}) saved_rdi=0x{:016x} saved_rsi=0x{:016x} saved_rbx=0x{:016x} saved_rax=0x{:016x}",
         target_addr,
         if is_guest { "guest" } else { "supervisor" },
         saved_rdi,
         saved_rsi,
         saved_rbx,
-        saved_r11
+        saved_rax
     );
 
     if is_guest {

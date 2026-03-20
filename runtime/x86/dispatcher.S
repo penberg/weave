@@ -143,7 +143,7 @@ dispatcher_trampoline:
 	mov	rdx, [rsp + 200]		// arg2: saved RSI (for debugging)
 	mov	rcx, [rsp + 248]		// arg3: saved RBX (for debugging)
 	mov	r8, [rsp + 208]			// arg4: saved RDI (for debugging)
-	mov	r9, [rsp + 152]			// arg5: saved R11 (for debugging)
+	mov	r9, [rsp + 144]			// arg5: saved RAX (return value)
 
 	// Stack is 16-byte aligned (272 bytes = 16 * 17)
 	call	dispatcher

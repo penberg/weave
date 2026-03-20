@@ -20,33 +20,34 @@ pub extern "C" fn signal_handler(sig: c_int, info: *mut siginfo_t, context: *mut
         // PROT_EXEC, this causes SIGBUS. We translate the guest code on demand
         // and resume execution at the translated address.
         if sig == libc::SIGBUS
-            && let Some(exec_ctx) = try_get_execution_context() {
-                let is_guest = pc >= exec_ctx.text_start && pc < exec_ctx.text_end;
-                if is_guest {
-                    trace!(
-                        "Signal handler: translating callback at guest 0x{:016x}",
-                        pc
-                    );
+            && let Some(exec_ctx) = try_get_execution_context()
+        {
+            let is_guest = pc >= exec_ctx.text_start && pc < exec_ctx.text_end;
+            if is_guest {
+                trace!(
+                    "Signal handler: translating callback at guest 0x{:016x}",
+                    pc
+                );
 
-                    // Translate the guest code at PC
-                    match translate_block(exec_ctx, pc, exec_ctx.text_end, false) {
-                        Ok(block) => {
-                            // Update PC to point to translated code (skip 8-byte header)
-                            let translated_addr = block.text_start().add(8) as u64;
-                            trace!(
-                                "Signal handler: resuming at translated 0x{:016x}",
-                                translated_addr
-                            );
-                            thread_state.__pc = translated_addr;
-                            // Return from signal handler - kernel will resume at translated code
-                            return;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to translate callback at 0x{:016x}: {}", pc, e);
-                        }
+                // Translate the guest code at PC
+                match translate_block(exec_ctx, pc, exec_ctx.text_end, false) {
+                    Ok(block) => {
+                        // Update PC to point to translated code (skip 8-byte header)
+                        let translated_addr = block.text_start().add(8) as u64;
+                        trace!(
+                            "Signal handler: resuming at translated 0x{:016x}",
+                            translated_addr
+                        );
+                        thread_state.__pc = translated_addr;
+                        // Return from signal handler - kernel will resume at translated code
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to translate callback at 0x{:016x}: {}", pc, e);
                     }
                 }
             }
+        }
 
         // Fatal error - print diagnostics and exit
         eprintln!("A fatal error has been detected:");

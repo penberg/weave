@@ -101,8 +101,8 @@ pub fn syscall(
             let old_limit = arg4 as *mut libc::rlimit;
             if !old_limit.is_null() {
                 let (cur, max): (u64, u64) = match arg2 {
-                    3 => (8 * 1024 * 1024, u64::MAX),   // RLIMIT_STACK: 8 MB
-                    7 => (1024, 1024 * 1024),            // RLIMIT_NOFILE: 1024
+                    3 => (8 * 1024 * 1024, u64::MAX), // RLIMIT_STACK: 8 MB
+                    7 => (1024, 1024 * 1024),         // RLIMIT_NOFILE: 1024
                     _ => (u64::MAX, u64::MAX),
                 };
                 unsafe {
@@ -123,7 +123,9 @@ pub fn syscall(
                         std::ptr::write_bytes(dst, 0, 16);
                         for i in 0..15 {
                             let c = *name.add(i);
-                            if c == 0 { break; }
+                            if c == 0 {
+                                break;
+                            }
                             *dst.add(i) = c;
                         }
                     }
@@ -180,8 +182,8 @@ pub fn syscall(
             }
         }
         SYS_SET_TID_ADDRESS => 1000, // deterministic TID
-        SYS_SCHED_YIELD => 0,       // no-op for single-threaded
-        SYS_SET_ROBUST_LIST => 0,   // no-op for single-threaded
+        SYS_SCHED_YIELD => 0,        // no-op for single-threaded
+        SYS_SET_ROBUST_LIST => 0,    // no-op for single-threaded
         SYS_GETRANDOM => {
             let buf = arg1 as *mut u8;
             let len = arg2 as usize;

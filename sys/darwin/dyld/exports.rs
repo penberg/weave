@@ -34,10 +34,7 @@ pub struct ReExport {
 /// A tuple of (direct_exports, re_exports) where:
 /// - `direct_exports` maps symbol names to their resolved addresses
 /// - `re_exports` contains symbols that need resolution from other libraries
-pub fn parse_exports_trie(
-    trie: &[u8],
-    base_address: u64,
-) -> (HashMap<String, u64>, Vec<ReExport>) {
+pub fn parse_exports_trie(trie: &[u8], base_address: u64) -> (HashMap<String, u64>, Vec<ReExport>) {
     let mut exports = HashMap::new();
     let mut re_exports = Vec::new();
 

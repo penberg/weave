@@ -8,8 +8,8 @@
 //! which we replace with our own implementation that allocates per-thread
 //! storage on first access.
 
-use super::macho::*;
 use super::MachO;
+use super::macho::*;
 use std::sync::Mutex;
 use tracing::{debug, error, trace, warn};
 
@@ -113,10 +113,7 @@ pub unsafe extern "C" fn weave_tlv_get_addr_impl(descriptor: *mut TlvDescriptor)
 
     trace!(
         "TLV thunk called: descriptor={:p}, thunk=0x{:x}, key={}, offset=0x{:x}",
-        descriptor,
-        thunk,
-        key,
-        offset
+        descriptor, thunk, key, offset
     );
 
     // Get this thread's TLV storage
@@ -137,12 +134,7 @@ pub unsafe extern "C" fn weave_tlv_get_addr_impl(descriptor: *mut TlvDescriptor)
     let value_at_tlv = unsafe { *(result as *const u64) };
     trace!(
         "TLV access: descriptor={:p}, key={}, offset=0x{:x}, base={:p}, result={:p}, value=0x{:x}",
-        descriptor,
-        key,
-        offset,
-        base,
-        result,
-        value_at_tlv
+        descriptor, key, offset, base, result, value_at_tlv
     );
 
     result

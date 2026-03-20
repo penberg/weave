@@ -142,7 +142,12 @@ fn translate_insn(
                         // Re-emit the original CBZ/CBNZ with patched offset to the
                         // taken exit stub. This preserves the sf bit (32-bit vs 64-bit
                         // register check) and does NOT modify NZCV flags.
-                        block.emit_exit_stub_patched_branch(insn, 0x7ffff << 5, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(
+                            insn,
+                            0x7ffff << 5,
+                            target_addr,
+                            fallthrough_addr,
+                        );
                         Ok(false)
                     }
                     decoder::COMPBRANCH::CBNZ_Rt_ADDR_PCREL19(cbnz) => {
@@ -154,7 +159,12 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        block.emit_exit_stub_patched_branch(insn, 0x7ffff << 5, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(
+                            insn,
+                            0x7ffff << 5,
+                            target_addr,
+                            fallthrough_addr,
+                        );
                         Ok(false)
                     }
                 },
@@ -170,7 +180,12 @@ fn translate_insn(
                         let fallthrough_addr = addr + 4;
                         // Re-emit the original TBZ/TBNZ with patched offset.
                         // Preserves bit-test semantics and does NOT modify NZCV.
-                        block.emit_exit_stub_patched_branch(insn, 0x3fff << 5, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(
+                            insn,
+                            0x3fff << 5,
+                            target_addr,
+                            fallthrough_addr,
+                        );
                         Ok(false)
                     }
                     decoder::TESTBRANCH::TBNZ_Rt_BIT_NUM_ADDR_PCREL14(tbnz) => {
@@ -182,7 +197,12 @@ fn translate_insn(
                         };
                         let target_addr = addr.wrapping_add((signed_offset << 2) as u64);
                         let fallthrough_addr = addr + 4;
-                        block.emit_exit_stub_patched_branch(insn, 0x3fff << 5, target_addr, fallthrough_addr);
+                        block.emit_exit_stub_patched_branch(
+                            insn,
+                            0x3fff << 5,
+                            target_addr,
+                            fallthrough_addr,
+                        );
                         Ok(false)
                     }
                 },
@@ -385,14 +405,14 @@ fn translate_insn(
                         // preserve any guest value by saving/restoring around the use.
                         // We intentionally avoid x17 here; x17 (IP1) is reserved for
                         // passing svc_imm into the syscall wrapper after state save.
-                        block.asm.emit_push_x11();      // spill guest x11 to [sp, #-16]!
+                        block.asm.emit_push_x11(); // spill guest x11 to [sp, #-16]!
                         block.asm.emit_ld_imm(11, target_addr);
                         match opc {
                             0 => block.asm.emit_ldr_s(rt, 11),
                             1 => block.asm.emit_ldr_d(rt, 11),
                             _ => block.asm.emit_ldr_q(rt, 11),
                         }
-                        block.asm.emit_pop_x11();       // restore guest x11 from [sp], #16
+                        block.asm.emit_pop_x11(); // restore guest x11 from [sp], #16
                         Ok(true)
                     }
                     decoder::LOADLIT::LDRSW_Rt_ADDR_PCREL19(ldr) => {
@@ -511,8 +531,7 @@ impl TranslatedBlockBuilder {
     ) {
         // Emit conditional branch that jumps to taken path if condition is true.
         // Skip offset = FALLTHROUGH_SKIP_IMM instructions (4 from ld_imm + 1 from b_imm).
-        self.asm
-            .emit_b_cond(cond, FALLTHROUGH_SKIP_IMM as i32 * 4);
+        self.asm.emit_b_cond(cond, FALLTHROUGH_SKIP_IMM as i32 * 4);
         self.emit_dispatch_pair(fallthrough_address, target_address);
     }
 

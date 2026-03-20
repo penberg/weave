@@ -148,7 +148,6 @@ pub struct ChainedFixup {
     pub segment_offset: u64, // Offset within segment
 }
 
-
 #[derive(Debug, Clone)]
 pub struct DyldInfo {
     pub dylibs: Vec<DylibInfo>,
@@ -734,18 +733,19 @@ fn resolve_symbol(symbol_name: &str, dylib_name: Option<&str>) -> Result<u64, Bi
 
     // 3. If from a shared cache library, look up in shared cache
     if let Some(lib) = dylib_name
-        && lib.contains("libSystem") {
-            // Symbol from libSystem - must be resolved from shared cache
-            if let Some(addr) = cache::lookup_shared_cache_symbol(symbol_name) {
-                debug!("Resolved {} from shared cache at 0x{:x}", symbol_name, addr);
-                return Ok(addr);
-            }
-            // Not found in shared cache - this is an error
-            return Err(BindingError::UnresolvedSymbol(format!(
-                "{} (from {})",
-                symbol_name, lib
-            )));
+        && lib.contains("libSystem")
+    {
+        // Symbol from libSystem - must be resolved from shared cache
+        if let Some(addr) = cache::lookup_shared_cache_symbol(symbol_name) {
+            debug!("Resolved {} from shared cache at 0x{:x}", symbol_name, addr);
+            return Ok(addr);
         }
+        // Not found in shared cache - this is an error
+        return Err(BindingError::UnresolvedSymbol(format!(
+            "{} (from {})",
+            symbol_name, lib
+        )));
+    }
 
     // 4. Unknown symbol - error (no dlsym fallback)
     Err(BindingError::UnresolvedSymbol(symbol_name.to_string()))

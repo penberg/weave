@@ -5,7 +5,7 @@
 //! space and prepare it for binary translation.
 
 use super::exports;
-use super::{chained, tlv, MachO, MACHO_BASE_ADDRESS};
+use super::{MACHO_BASE_ADDRESS, MachO, chained, tlv};
 use crate::mmap::MappedFile;
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -2,27 +2,20 @@
  * Test stack alignment ABI compliance.
  *
  * The ABI requires 16-byte stack alignment at function call boundaries:
- * - x86-64 System V: RSP must be 16-byte aligned before CALL
- * - ARM64: SP must be 16-byte aligned at all times
+ * - x86-64 System V: RSP must be 16-byte aligned before CALL, so a callee
+ *   usually observes entry RSP % 16 == 8 after the return address is pushed.
+ * - ARM64: SP must be 16-byte aligned at all times.
  *
- * Misalignment can cause:
- * - SIMD instruction faults (SSE/AVX require aligned access)
- * - Performance degradation
- * - Subtle memory corruption
- *
- * Binary translators must maintain proper alignment when:
- * - Translating function prologues/epilogues
- * - Handling stack allocations (alloca)
- * - Managing variable-length arrays
+ * Binary translators must preserve these rules across translated calls,
+ * stack allocations, and variable-length arrays.
  */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
-/* Check stack alignment - get actual SP value using inline assembly */
-__attribute__((noinline))
-uintptr_t get_stack_address(void) {
+/* Read the current function's stack pointer without adding another call frame. */
+static inline uintptr_t get_stack_address(void) {
     uintptr_t sp;
     /* Read actual stack pointer register */
 #if defined(__aarch64__)
@@ -35,10 +28,18 @@ uintptr_t get_stack_address(void) {
     return sp;
 }
 
-__attribute__((noinline))
-int check_alignment(int alignment) {
-    uintptr_t sp = get_stack_address();
-    return (sp % alignment) == 0;
+static inline uintptr_t normalize_call_boundary_stack(uintptr_t sp) {
+#if defined(__aarch64__)
+    return sp;
+#elif defined(__x86_64__)
+    return sp + sizeof(uintptr_t);
+#else
+#error "Unsupported architecture"
+#endif
+}
+
+static inline int call_boundary_is_aligned(uintptr_t sp) {
+    return (normalize_call_boundary_stack(sp) % 16) == 0;
 }
 
 /* Functions with various local variable sizes */
@@ -107,7 +108,7 @@ uintptr_t many_locals(void) {
 __attribute__((noinline))
 int recursive_check_alignment(int depth, int failures) {
     uintptr_t sp = get_stack_address();
-    if (sp % 16 != 0) {
+    if (!call_boundary_is_aligned(sp)) {
         failures++;
     }
 
@@ -182,16 +183,17 @@ uintptr_t vla_test(int size) {
 /* Test alignment preservation across multiple calls */
 __attribute__((noinline))
 int multi_call_alignment(void) {
-    uintptr_t sp1 = get_stack_address();
-    uintptr_t sp2 = func_small_locals();
-    uintptr_t sp3 = func_medium_locals();
-    uintptr_t sp4 = func_large_locals();
+    uintptr_t (*volatile small_fn)(void) = func_small_locals;
+    uintptr_t (*volatile medium_fn)(void) = func_medium_locals;
+    uintptr_t (*volatile large_fn)(void) = func_large_locals;
+    uintptr_t sp1 = small_fn();
+    uintptr_t sp2 = medium_fn();
+    uintptr_t sp3 = large_fn();
 
-    /* All should be 16-byte aligned */
-    if (sp1 % 16 != 0) return 1;
-    if (sp2 % 16 != 0) return 2;
-    if (sp3 % 16 != 0) return 3;
-    if (sp4 % 16 != 0) return 4;
+    /* Indirect calls keep the call boundary opaque to the optimizer. */
+    if (!call_boundary_is_aligned(sp1)) return 1;
+    if (!call_boundary_is_aligned(sp2)) return 2;
+    if (!call_boundary_is_aligned(sp3)) return 3;
     return 0;
 }
 
@@ -213,9 +215,10 @@ int main(void) {
     /* Test 2: Alignment with small locals */
     {
         uintptr_t sp = func_small_locals();
-        if (sp % 16 != 0) {
-            printf("FAIL: small_locals: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: small_locals: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: small_locals\n");
@@ -225,9 +228,10 @@ int main(void) {
     /* Test 3: Alignment with medium locals */
     {
         uintptr_t sp = func_medium_locals();
-        if (sp % 16 != 0) {
-            printf("FAIL: medium_locals: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: medium_locals: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: medium_locals\n");
@@ -237,9 +241,10 @@ int main(void) {
     /* Test 4: Alignment with large locals */
     {
         uintptr_t sp = func_large_locals();
-        if (sp % 16 != 0) {
-            printf("FAIL: large_locals: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: large_locals: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: large_locals\n");
@@ -249,9 +254,10 @@ int main(void) {
     /* Test 5: Nested function calls */
     {
         uintptr_t sp = nested_1();
-        if (sp % 16 != 0) {
-            printf("FAIL: nested_calls: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: nested_calls: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: nested_calls\n");
@@ -261,9 +267,10 @@ int main(void) {
     /* Test 6: Many local variables */
     {
         uintptr_t sp = many_locals();
-        if (sp % 16 != 0) {
-            printf("FAIL: many_locals: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: many_locals: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: many_locals\n");
@@ -287,7 +294,9 @@ int main(void) {
         uintptr_t sp5 = args_5(1, 2, 3, 4, 5);
         uintptr_t sp10 = args_10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
 
-        if (sp1 % 16 != 0 || sp5 % 16 != 0 || sp10 % 16 != 0) {
+        if (!call_boundary_is_aligned(sp1) ||
+            !call_boundary_is_aligned(sp5) ||
+            !call_boundary_is_aligned(sp10)) {
             printf("FAIL: various_args: misaligned\n");
             failed = 1;
         } else {
@@ -298,9 +307,10 @@ int main(void) {
     /* Test 9: Double arguments */
     {
         uintptr_t sp = double_args(1.0, 2.0, 3.0, 4.0);
-        if (sp % 16 != 0) {
-            printf("FAIL: double_args: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: double_args: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: double_args\n");
@@ -310,9 +320,10 @@ int main(void) {
     /* Test 10: After printf call */
     {
         uintptr_t sp = after_printf();
-        if (sp % 16 != 0) {
-            printf("FAIL: after_printf: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: after_printf: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: after_printf\n");
@@ -333,9 +344,10 @@ int main(void) {
     /* Test 12: VLA alignment */
     {
         uintptr_t sp = vla_test(100);
-        if (sp % 16 != 0) {
-            printf("FAIL: vla_alignment: sp=0x%lx (mod 16 = %lu)\n",
-                   (unsigned long)sp, (unsigned long)(sp % 16));
+        if (!call_boundary_is_aligned(sp)) {
+            printf("FAIL: vla_alignment: sp=0x%lx (call-boundary mod 16 = %lu)\n",
+                   (unsigned long)sp,
+                   (unsigned long)(normalize_call_boundary_stack(sp) % 16));
             failed = 1;
         } else {
             printf("PASS: vla_alignment\n");

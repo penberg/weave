@@ -9,3 +9,5 @@ random
 stdio
 string
 time
+args
+envp

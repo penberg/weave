@@ -1,1 +1,13 @@
 math
+arch_prctl
+auxv
+exit_status
+getrandom
+prctl
+prlimit64
+sched_getaffinity
+sched_yield
+set_robust_list
+set_tid_address
+syscall_errno
+sysinfo

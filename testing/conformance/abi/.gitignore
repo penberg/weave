@@ -15,3 +15,5 @@ recursion_deep
 register_pressure
 string_ops
 switch
+varargs_stress
+variadic_bridge

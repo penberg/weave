@@ -1185,24 +1185,20 @@ impl TranslatedBlock {
             // Set up guest registers and jump to translated code
             // This never returns - the guest code will eventually call exit() or
             // main() will return (triggering the sentinel detection in the dispatcher).
+            // Use explicit register bindings for argument registers so LLVM places
+            // values directly, avoiding clobbering when moving to named registers.
             std::arch::asm!(
                 "mov rsp, {rsp}",
                 "mov rbp, {rbp}",
-                "mov rdi, {rdi}",
-                "mov rsi, {rsi}",
-                "mov rdx, {rdx}",
-                "mov rcx, {rcx}",
-                "mov r8, {r8}",
-                "mov r9, {r9}",
                 "jmp {code}",
                 rsp = in(reg) rsp,
                 rbp = in(reg) rbp,
-                rdi = in(reg) rdi,
-                rsi = in(reg) rsi,
-                rdx = in(reg) rdx,
-                rcx = in(reg) rcx,
-                r8 = in(reg) r8,
-                r9 = in(reg) r9,
+                in("rdi") rdi,
+                in("rsi") rsi,
+                in("rdx") rdx,
+                in("rcx") rcx,
+                in("r8") r8,
+                in("r9") r9,
                 code = in(reg) guest_code_start,
                 options(noreturn)
             );
@@ -1240,21 +1236,15 @@ impl TranslatedBlock {
             std::arch::asm!(
                 "mov rsp, {rsp}",
                 "mov rbp, {rbp}",
-                "mov rdi, {rdi}",
-                "mov rsi, {rsi}",
-                "mov rdx, {rdx}",
-                "mov rcx, {rcx}",
-                "mov r8, {r8}",
-                "mov r9, {r9}",
                 "jmp {code}",
                 rsp = in(reg) rsp,
                 rbp = in(reg) rbp,
-                rdi = in(reg) rdi,
-                rsi = in(reg) rsi,
-                rdx = in(reg) rdx,
-                rcx = in(reg) rcx,
-                r8 = in(reg) r8,
-                r9 = in(reg) r9,
+                in("rdi") rdi,
+                in("rsi") rsi,
+                in("rdx") rdx,
+                in("rcx") rcx,
+                in("r8") r8,
+                in("r9") r9,
                 code = in(reg) guest_code_start,
                 options(noreturn)
             );

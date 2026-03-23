@@ -9,6 +9,7 @@ TESTS += math
 TESTS += stdio
 TESTS += string
 TESTS += memory
+TESTS += envp
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

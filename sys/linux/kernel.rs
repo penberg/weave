@@ -68,6 +68,7 @@ impl Task {
         &mut self,
         path: &str,
         argv: &[&str],
+        envp: &[String],
     ) -> Result<std::convert::Infallible, crate::Error> {
         // Open and parse the ELF file
         let file = MappedFile::open(path).map_err(|e| exec_error(path, e))?;
@@ -175,7 +176,21 @@ impl Task {
         // Stack grows down, so start at the top of the stack
         let mut sp = stack_base + stack_size as u64;
 
-        // First, write all the argument strings and collect their addresses
+        // First, write all the environment strings and collect their addresses
+        let mut env_addrs: Vec<u64> = Vec::with_capacity(envp.len());
+        for env_var in envp {
+            let bytes = env_var.as_bytes();
+            sp -= (bytes.len() + 1) as u64; // +1 for null terminator
+            // Align to 8 bytes
+            sp &= !7;
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), sp as *mut u8, bytes.len());
+                *((sp + bytes.len() as u64) as *mut u8) = 0; // null terminator
+            }
+            env_addrs.push(sp);
+        }
+
+        // Write all the argument strings and collect their addresses
         let mut arg_addrs: Vec<u64> = Vec::with_capacity(argv.len());
         for arg in argv {
             let bytes = arg.as_bytes();
@@ -193,10 +208,29 @@ impl Task {
         // Align stack to 16 bytes
         sp &= !15;
 
-        // Push NULL terminator for envp array (no environment variables)
+        // The Linux ABI requires SP to be 16-byte aligned when _start runs.
+        // Total 8-byte entries: 1 (argc) + argc + 1 (argv NULL) + envp_count + 1 (envp NULL)
+        // If odd, we need one padding entry to maintain 16-byte alignment.
+        let total_entries = 1 + argv.len() + 1 + envp.len() + 1;
+        if total_entries % 2 != 0 {
+            sp -= 8;
+            unsafe {
+                *(sp as *mut u64) = 0;
+            }
+        }
+
+        // Push NULL terminator for envp array
         sp -= 8;
         unsafe {
             *(sp as *mut u64) = 0;
+        }
+
+        // Push envp pointers in reverse order
+        for addr in env_addrs.iter().rev() {
+            sp -= 8;
+            unsafe {
+                *(sp as *mut u64) = *addr;
+            }
         }
 
         // Push NULL terminator for argv array
@@ -219,9 +253,6 @@ impl Task {
         unsafe {
             *(sp as *mut u64) = argv.len() as u64;
         }
-
-        // Align to 16 bytes for ABI compliance
-        sp &= !15;
 
         debug!(
             "Guest stack: sp=0x{:x}, argc={}, argv=0x{:x}",
@@ -252,9 +283,13 @@ impl Task {
 }
 
 /// Execute a file
-pub fn execve(path: &str, argv: &[&str]) -> Result<std::convert::Infallible, crate::Error> {
+pub fn execve(
+    path: &str,
+    argv: &[&str],
+    envp: &[String],
+) -> Result<std::convert::Infallible, crate::Error> {
     let task = unsafe { &mut *get_current_task() };
-    task.execve(path, argv)
+    task.execve(path, argv, envp)
 }
 
 /// Set up Thread-Local Storage for the guest binary.

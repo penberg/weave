@@ -49,7 +49,8 @@ fn main() {
     for arg in &opts.program_args {
         argv.push(arg);
     }
-    let Err(e) = sys::execve(&opts.program, &argv);
+    let envp: Vec<String> = env::vars().map(|(k, v)| format!("{}={}", k, v)).collect();
+    let Err(e) = sys::execve(&opts.program, &argv, &envp);
     eprintln!("weave: {}", e);
     exit(1);
 }

@@ -42,9 +42,11 @@ pub extern "C" fn libc_start_main(
 
     // Set up CPU state for main(argc, argv, envp)
     // x86-64 calling convention: rdi, rsi, rdx for first 3 args
+    // envp starts right after the argv NULL terminator: &argv[argc + 1]
+    let envp = unsafe { argv.add(argc as usize + 1) };
     task.context.state.regs[crate::runtime::x86::REG_RDI] = argc as u64; // RDI: argc
     task.context.state.regs[crate::runtime::x86::REG_RSI] = argv as u64; // RSI: argv
-    task.context.state.regs[crate::runtime::x86::REG_RDX] = 0; // RDX: envp (NULL)
+    task.context.state.regs[crate::runtime::x86::REG_RDX] = envp as u64; // RDX: envp
 
     // Push a sentinel return address (0) onto the guest stack
     // When main() returns, the dispatcher will see target_addr == 0 and call exit()

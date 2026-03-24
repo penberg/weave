@@ -5,11 +5,17 @@ use tracing::debug;
 
 // Base address for loading ELF binaries
 pub const ELF_BASE_ADDRESS: u64 = 0x0000000200000000;
+/// Base address for loading guest shared libraries.
+pub const ELF_LIBRARY_BASE_ADDRESS: u64 = 0x0000000300000000;
+/// Spacing between guest shared libraries to keep mappings disjoint.
+pub const ELF_LIBRARY_ADDRESS_STRIDE: u64 = 0x0000000010000000;
 
 /// A parsed ELF file.
 pub struct ElfFile {
+    pub base_address: u64,
     pub arch: Arch,
     pub entry_point: u64,
+    pub needed_libraries: Vec<String>,
     pub segments: Vec<Segment>,
     pub sections: Vec<Section>,
     pub file: MappedFile,
@@ -47,14 +53,14 @@ pub struct Section {
     pub executable: bool,
 }
 
-/// Load an ELF file into memory.
-pub fn load_elf(file: MappedFile) -> Result<ElfFile> {
-    let elf_file = parse_elf(file)?;
+/// Load an ELF object into memory at the given guest base.
+pub fn load_elf(file: MappedFile, base_address: u64) -> Result<ElfFile> {
+    let elf_file = parse_elf(file, base_address)?;
     load_segments(&elf_file);
     Ok(elf_file)
 }
 
-fn parse_elf(file: MappedFile) -> Result<ElfFile> {
+fn parse_elf(file: MappedFile, base_address: u64) -> Result<ElfFile> {
     let elf = Elf::parse(file.data).map_err(|e| ObjectFormatError::from(e))?;
     if elf.header.e_machine != goblin::elf::header::EM_X86_64 {
         return Err(ObjectFormatError::UnsupportedArch {
@@ -85,7 +91,7 @@ fn parse_elf(file: MappedFile) -> Result<ElfFile> {
                 prot |= libc::PROT_EXEC;
             }
 
-            let vaddr = ph.p_vaddr + ELF_BASE_ADDRESS;
+            let vaddr = ph.p_vaddr + base_address;
             let addr_aligned = vaddr & !(page_size - 1);
             let fileoff_aligned = ph.p_offset & !(page_size - 1);
             let page_offset = vaddr - addr_aligned;
@@ -109,16 +115,18 @@ fn parse_elf(file: MappedFile) -> Result<ElfFile> {
             let executable = sh.sh_flags & goblin::elf::section_header::SHF_EXECINSTR as u64 != 0;
             sections.push(Section {
                 name,
-                addr: sh.sh_addr + ELF_BASE_ADDRESS,
+                addr: sh.sh_addr + base_address,
                 size: sh.sh_size,
                 executable,
             });
         }
     }
-    let entry_point = elf.entry + ELF_BASE_ADDRESS;
+    let entry_point = elf.entry + base_address;
     Ok(ElfFile {
+        base_address,
         arch,
         entry_point,
+        needed_libraries: elf.libraries.iter().map(|lib| (*lib).to_string()).collect(),
         segments,
         sections,
         file,

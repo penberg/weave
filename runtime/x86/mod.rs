@@ -61,6 +61,14 @@ pub fn translate_and_branch_to(
     }
 }
 
+pub fn translate_and_call(ctx: &mut crate::runtime::ExecutionContext, address: u64) -> u64 {
+    let block = translate_block(ctx, address, ctx.text_end, true).unwrap();
+    if ctx.print_code {
+        block.print_code();
+    }
+    block.execute_callable(&mut ctx.state)
+}
+
 /// Allocates memory for the text segment
 pub struct TextAllocator {
     /// The allocated text segment

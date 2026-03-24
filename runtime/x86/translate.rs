@@ -1205,6 +1205,60 @@ impl TranslatedBlock {
         }
     }
 
+    pub fn execute_callable(&self, state: &mut CpuState) -> u64 {
+        unsafe {
+            std::ptr::write(self.text_start as *mut u64, state as *mut CpuState as u64);
+
+            let guest_code_start = self.text_start.add(8);
+
+            let rdi = state.regs[super::REG_RDI];
+            let rsi = state.regs[super::REG_RSI];
+            let rdx = state.regs[super::REG_RDX];
+            let rcx = state.regs[super::REG_RCX];
+            let r8 = state.regs[super::REG_R8];
+            let r9 = state.regs[super::REG_R9];
+            let guest_rsp = state.regs[super::REG_RSP].wrapping_sub(8);
+            let rbp = state.regs[super::REG_RBP];
+
+            let mut host_rsp_save: u64 = 0;
+            let result: u64;
+
+            tracing::debug!(
+                "execute_callable: rdi=0x{:x}, rsi=0x{:x}, rdx=0x{:x}, rsp=0x{:x}, code={:p}",
+                rdi,
+                rsi,
+                rdx,
+                guest_rsp,
+                guest_code_start
+            );
+
+            std::arch::asm!(
+                "mov [{host_rsp_save}], rsp",
+                "lea r11, [rip + 2f]",
+                "mov [{guest_rsp}], r11",
+                "mov rsp, {guest_rsp}",
+                "mov rbp, {rbp}",
+                "jmp {code}",
+                "2:",
+                "mov rsp, [{host_rsp_save}]",
+                host_rsp_save = in(reg) &mut host_rsp_save,
+                guest_rsp = in(reg) guest_rsp,
+                rbp = in(reg) rbp,
+                in("rdi") rdi,
+                in("rsi") rsi,
+                in("rdx") rdx,
+                in("rcx") rcx,
+                in("r8") r8,
+                in("r9") r9,
+                code = in(reg) guest_code_start,
+                lateout("rax") result,
+                lateout("r11") _,
+            );
+
+            result
+        }
+    }
+
     pub fn execute_direct(&self, state: &mut CpuState) -> ! {
         unsafe {
             // Store cpu_state pointer

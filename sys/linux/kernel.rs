@@ -72,7 +72,7 @@ impl Task {
     ) -> Result<std::convert::Infallible, crate::Error> {
         // Open and parse the ELF file
         let file = MappedFile::open(path).map_err(|e| exec_error(path, e))?;
-        let elf = load_elf(file).map_err(|e| exec_error(path, e))?;
+        let elf = load_elf(file, ELF_BASE_ADDRESS).map_err(|e| exec_error(path, e))?;
 
         // Check if this is a dynamically linked binary
         let parsed_elf = Elf::parse(elf.file.data).map_err(|e| crate::Error::Exec {
@@ -87,7 +87,7 @@ impl Task {
 
             // Load dependencies (including libc) into guest address space
             linker
-                .load_executable(&elf)
+                .load_executable(path, &elf)
                 .map_err(|e| crate::Error::Exec {
                     path: path.to_string(),
                     message: format!("failed to load dependencies: {}", e),

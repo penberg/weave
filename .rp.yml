@@ -1,0 +1,10 @@
+version: 1
+
+verify-cmd: make test
+
+tests:
+  - testing/conformance
+
+guidance: |
+  Prefer adding a minimal regression test under testing/conformance.
+  Choose the most specific suite for the bug, and update the suite Makefile when needed.

@@ -1217,10 +1217,10 @@ impl TranslatedBlock {
             let rcx = state.regs[super::REG_RCX];
             let r8 = state.regs[super::REG_R8];
             let r9 = state.regs[super::REG_R9];
+            let guest_stack_top = state.regs[super::REG_RSP];
             let guest_rsp = state.regs[super::REG_RSP].wrapping_sub(8);
             let rbp = state.regs[super::REG_RBP];
 
-            let mut host_rsp_save: u64 = 0;
             let result: u64;
 
             tracing::debug!(
@@ -1233,26 +1233,50 @@ impl TranslatedBlock {
             );
 
             std::arch::asm!(
-                "mov [{host_rsp_save}], rsp",
-                "lea r11, [rip + 2f]",
-                "mov [{guest_rsp}], r11",
-                "mov rsp, {guest_rsp}",
-                "mov rbp, {rbp}",
-                "jmp {code}",
+                "push rbx",
+                "push rbp",
+                "push r12",
+                "push r13",
+                "push r14",
+                "push r15",
+                "sub rsp, 24",
+                "mov [rsp], r10",
+                "mov r11, [r10]",
+                "mov [rsp + 8], r11",
+                "mov r11, rsp",
+                "lea rax, [rip + 2f]",
+                "mov [r12], rax",
+                "mov [r10], r11",
+                "mov rsp, r12",
+                "mov rbp, r13",
+                "jmp r14",
                 "2:",
-                "mov rsp, [{host_rsp_save}]",
-                host_rsp_save = in(reg) &mut host_rsp_save,
-                guest_rsp = in(reg) guest_rsp,
-                rbp = in(reg) rbp,
+                "mov r11, [rsp]",
+                "mov rsp, r11",
+                "mov [rsp + 16], rax",
+                "mov r11, [rsp]",
+                "mov rax, [rsp + 8]",
+                "mov [r11], rax",
+                "mov rax, [rsp + 16]",
+                "add rsp, 24",
+                "pop r15",
+                "pop r14",
+                "pop r13",
+                "pop r12",
+                "pop rbp",
+                "pop rbx",
+                in("r10") guest_stack_top,
+                in("r12") guest_rsp,
+                in("r13") rbp,
                 in("rdi") rdi,
                 in("rsi") rsi,
                 in("rdx") rdx,
                 in("rcx") rcx,
                 in("r8") r8,
                 in("r9") r9,
-                code = in(reg) guest_code_start,
+                in("r14") guest_code_start,
                 lateout("rax") result,
-                lateout("r11") _,
+                clobber_abi("sysv64"),
             );
 
             result

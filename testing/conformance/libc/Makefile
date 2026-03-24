@@ -10,6 +10,7 @@ TESTS += stdio
 TESTS += string
 TESTS += memory
 TESTS += envp
+TESTS += dt_needed
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie
@@ -28,6 +29,9 @@ all: $(TESTS)
 
 math: math.c
 	@gcc $(CFLAGS) $< $(LDFLAGS) -lm -o $@
+
+dt_needed: dt_needed.c
+	@gcc $(CFLAGS) $< $(LDFLAGS) -lz -o $@
 
 test: $(TESTS)
 	@for test in $(TESTS); do \

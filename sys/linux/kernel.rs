@@ -93,6 +93,9 @@ impl Task {
                     message: format!("failed to load dependencies: {}", e),
                 })?;
 
+            // Compute TLS layout before relocation (R_X86_64_TPOFF64 needs it)
+            linker.setup_tls(&elf);
+
             // Perform relocations
             linker.relocate(&elf).map_err(|e| crate::Error::Exec {
                 path: path.to_string(),

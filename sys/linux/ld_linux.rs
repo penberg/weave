@@ -8,6 +8,7 @@ use crate::sys::linux::elf::{
 };
 use crate::{Error, Result};
 use goblin::elf::Elf;
+use goblin::elf::program_header::PT_TLS;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
@@ -27,6 +28,9 @@ pub struct DynamicLinker {
     loaded_paths: HashMap<PathBuf, usize>,
     /// Next guest base to use for a library mapping.
     next_library_base: u64,
+    /// TLS offsets for each loaded module (base_address -> l_tls_offset).
+    /// In variant II, a TLS variable at st_value in a module is at TP - l_tls_offset + st_value.
+    tls_offsets: HashMap<u64, u64>,
 }
 
 pub struct LoadedLibrary {
@@ -41,6 +45,7 @@ impl DynamicLinker {
             libraries: Vec::new(),
             loaded_paths: HashMap::new(),
             next_library_base: ELF_LIBRARY_BASE_ADDRESS,
+            tls_offsets: HashMap::new(),
         };
         // Register supervisor-level symbols
         linker.register_supervisor_symbols();
@@ -92,6 +97,48 @@ impl DynamicLinker {
         }
 
         Ok(())
+    }
+
+    /// Compute the TLS layout for the executable and all loaded libraries.
+    /// Must be called after load_executable() and before relocate(), because
+    /// R_X86_64_TPOFF64 relocations need the TLS offsets.
+    pub fn setup_tls(&mut self, executable: &ElfFile) {
+        let mut current_offset: usize = 0;
+
+        // Process executable first (closest to TCB in variant II)
+        if let Ok(elf) = Elf::parse(executable.file.data) {
+            if let Some(tls_phdr) = elf.program_headers.iter().find(|ph| ph.p_type == PT_TLS) {
+                let align = std::cmp::max(tls_phdr.p_align as usize, 16);
+                let memsz = tls_phdr.p_memsz as usize;
+                current_offset = (memsz + align - 1) & !(align - 1);
+                self.tls_offsets
+                    .insert(executable.base_address, current_offset as u64);
+                debug!(
+                    "TLS: executable base=0x{:x} memsz={} offset={}",
+                    executable.base_address, memsz, current_offset
+                );
+            }
+        }
+
+        // Process libraries (placed further from TCB)
+        for library in &self.libraries {
+            if let Ok(elf) = Elf::parse(library.elf.file.data) {
+                if let Some(tls_phdr) = elf.program_headers.iter().find(|ph| ph.p_type == PT_TLS) {
+                    let align = std::cmp::max(tls_phdr.p_align as usize, 16);
+                    let memsz = tls_phdr.p_memsz as usize;
+                    current_offset = (current_offset + memsz + align - 1) & !(align - 1);
+                    self.tls_offsets
+                        .insert(library.elf.base_address, current_offset as u64);
+                    debug!(
+                        "TLS: library {} base=0x{:x} memsz={} offset={}",
+                        library.path.display(),
+                        library.elf.base_address,
+                        memsz,
+                        current_offset
+                    );
+                }
+            }
+        }
     }
 
     /// Get the text bounds of loaded libraries
@@ -206,6 +253,15 @@ impl DynamicLinker {
                         }
                     }
                 }
+                goblin::elf::reloc::R_X86_64_TPOFF64 => {
+                    let sym_idx = reloc.r_sym;
+                    let addend = reloc.r_addend.unwrap_or(0) as i64;
+                    let reloc_addr = (reloc.r_offset + object.base_address) as *mut u64;
+                    let tpoff = self.resolve_tls_symbol(&elf, object, sym_idx, addend)?;
+                    unsafe {
+                        *reloc_addr = tpoff as u64;
+                    }
+                }
                 goblin::elf::reloc::R_X86_64_IRELATIVE => {
                     let reloc_addr = (reloc.r_offset + object.base_address) as *mut u64;
                     let resolver = object.base_address + reloc.r_addend.unwrap_or(0) as u64;
@@ -260,6 +316,93 @@ impl DynamicLinker {
                 };
                 Error::DynamicLinker(format!("Unresolved {}: {}", kind, sym_name))
             })
+    }
+
+    /// Resolve a TLS symbol for R_X86_64_TPOFF64.
+    /// Returns the TP-relative offset: sym.st_value + addend - l_tls_offset
+    fn resolve_tls_symbol(
+        &self,
+        elf: &Elf<'_>,
+        object: &ElfFile,
+        sym_idx: usize,
+        addend: i64,
+    ) -> Result<i64> {
+        let sym = elf.dynsyms.get(sym_idx).ok_or_else(|| {
+            Error::DynamicLinker(format!("Invalid symbol index in TLS relocation: {}", sym_idx))
+        })?;
+
+        if sym_idx == 0 || sym.st_name == 0 {
+            let tls_offset = self.tls_offsets.get(&object.base_address).copied().ok_or_else(|| {
+                Error::DynamicLinker(format!(
+                    "No TLS offset for object at base 0x{:x}",
+                    object.base_address
+                ))
+            })?;
+            return Ok(addend - tls_offset as i64);
+        }
+
+        let sym_name = elf.dynstrtab.get_at(sym.st_name).ok_or_else(|| {
+            Error::DynamicLinker(format!(
+                "Missing symbol name for TLS relocation index {}",
+                sym_idx
+            ))
+        })?;
+
+        // If the symbol is defined locally, use this object's TLS offset
+        if sym.st_shndx != goblin::elf::section_header::SHN_UNDEF as usize {
+            let tls_offset = self.tls_offsets.get(&object.base_address).copied().ok_or_else(|| {
+                Error::DynamicLinker(format!(
+                    "No TLS offset for object at base 0x{:x} (symbol {})",
+                    object.base_address, sym_name
+                ))
+            })?;
+            let value = sym.st_value as i64 + addend - tls_offset as i64;
+            debug!("TLS relocation (local): {} -> tpoff={}", sym_name, value);
+            return Ok(value);
+        }
+
+        // Search loaded libraries for the TLS symbol definition
+        for library in &self.libraries {
+            if let Ok(lib_elf) = Elf::parse(library.elf.file.data) {
+                for lib_sym in &lib_elf.dynsyms {
+                    if lib_sym.st_name == 0
+                        || lib_sym.st_shndx == goblin::elf::section_header::SHN_UNDEF as usize
+                    {
+                        continue;
+                    }
+                    if goblin::elf::sym::st_type(lib_sym.st_info) != goblin::elf::sym::STT_TLS {
+                        continue;
+                    }
+                    if let Some(name) = lib_elf.dynstrtab.get_at(lib_sym.st_name) {
+                        if name == sym_name {
+                            let tls_offset = self
+                                .tls_offsets
+                                .get(&library.elf.base_address)
+                                .copied()
+                                .ok_or_else(|| {
+                                    Error::DynamicLinker(format!(
+                                        "No TLS offset for library {}",
+                                        library.path.display(),
+                                    ))
+                                })?;
+                            let value = lib_sym.st_value as i64 + addend - tls_offset as i64;
+                            debug!(
+                                "TLS relocation: {} found in {} -> tpoff={}",
+                                sym_name,
+                                library.path.display(),
+                                value
+                            );
+                            return Ok(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(Error::DynamicLinker(format!(
+            "Unresolved TLS symbol: {}",
+            sym_name
+        )))
     }
 
     fn apply_relr_relocations(&self, elf: &Elf<'_>, object: &ElfFile) {

@@ -96,14 +96,76 @@ impl Task {
             // Compute TLS layout before relocation (R_X86_64_TPOFF64 needs it)
             linker.setup_tls(&elf);
 
+            // Compute text bounds before relocation so that IFUNC resolvers
+            // can translate and execute code via translate_and_call.
+            let lib_bounds = linker.get_library_text_bounds();
+
+            // Compute executable text bounds (same logic as below, but needed early)
+            let exec_sections: Vec<_> = elf
+                .sections
+                .iter()
+                .filter(|section| section.executable)
+                .collect();
+            let (mut early_text_start, mut early_text_end) = if exec_sections.is_empty() {
+                (0, u64::MAX)
+            } else {
+                let start = exec_sections.iter().map(|s| s.addr).min().unwrap();
+                let end = exec_sections.iter().map(|s| s.addr + s.size).max().unwrap();
+                (start, end)
+            };
+            let (lib_start, lib_end) = lib_bounds;
+            if lib_start < early_text_start {
+                early_text_start = lib_start;
+            }
+            if lib_end > early_text_end {
+                early_text_end = lib_end;
+            }
+
+            // Set text bounds and current context before relocation so that
+            // IFUNC resolvers (R_X86_64_IRELATIVE) can use translate_and_call.
+            self.context.text_start = early_text_start;
+            self.context.text_end = early_text_end;
+            crate::runtime::set_current_context(
+                &mut self.context as *mut crate::runtime::ExecutionContext,
+            );
+
+            // Allocate a temporary stack for IFUNC resolvers during relocation.
+            // The real guest stack is set up later, but IFUNC resolvers need a
+            // valid stack to execute.
+            let ifunc_stack_size: usize = 64 * 1024; // 64KB is plenty
+            let ifunc_stack_base: u64 = 0x7ffe00000000;
+            let ifunc_stack_ptr = unsafe {
+                libc::mmap(
+                    ifunc_stack_base as *mut libc::c_void,
+                    ifunc_stack_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+                    -1,
+                    0,
+                )
+            };
+            if ifunc_stack_ptr == libc::MAP_FAILED {
+                panic!("Failed to allocate IFUNC resolver stack");
+            }
+            // Stack grows down; point near the top, 16-byte aligned.
+            // Leave space at the top because execute_callable writes to [RSP].
+            self.context.state.regs[crate::runtime::x86::REG_RSP] =
+                (ifunc_stack_base + ifunc_stack_size as u64) - 16;
+
             // Perform relocations
             linker.relocate(&elf).map_err(|e| crate::Error::Exec {
                 path: path.to_string(),
                 message: format!("failed to relocate: {}", e),
             })?;
 
-            // Get library text bounds for the dispatcher
-            let lib_bounds = linker.get_library_text_bounds();
+            // Free temporary IFUNC resolver stack and clear code cache.
+            // IFUNC resolver blocks were translated with returnable=true; they
+            // must not be reused during normal execution which may need different
+            // translation.
+            unsafe {
+                libc::munmap(ifunc_stack_ptr, ifunc_stack_size);
+            }
+            self.context.code_cache.clear();
 
             debug!("Using ELF entry point (_start) at 0x{:x}", elf.entry_point);
             (elf.entry_point, Some(lib_bounds))

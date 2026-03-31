@@ -262,6 +262,21 @@ impl DynamicLinker {
                         *reloc_addr = tpoff as u64;
                     }
                 }
+                goblin::elf::reloc::R_X86_64_TLSDESC => {
+                    // TLSDESC: a pair of words [resolver, argument].
+                    // For the static TLS case, the resolver just returns the
+                    // argument which is the TP-relative offset.
+                    let sym_idx = reloc.r_sym;
+                    let addend = reloc.r_addend.unwrap_or(0) as i64;
+                    let tpoff = self.resolve_tls_symbol(&elf, object, sym_idx, addend)?;
+                    let reloc_addr = (reloc.r_offset + object.base_address) as *mut u64;
+                    unsafe {
+                        // resolver: _tlsdesc_return just returns the argument
+                        *reloc_addr = tlsdesc_return as u64;
+                        // argument: the TP-relative offset
+                        *reloc_addr.add(1) = tpoff as u64;
+                    }
+                }
                 goblin::elf::reloc::R_X86_64_IRELATIVE => {
                     let reloc_addr = (reloc.r_offset + object.base_address) as *mut u64;
                     let resolver = object.base_address + reloc.r_addend.unwrap_or(0) as u64;
@@ -468,6 +483,18 @@ impl DynamicLinker {
             return Some(addr);
         }
 
+        // Fall back to dlsym from host libc for functions not explicitly
+        // registered as weave_symbols. This prevents guest libc code from
+        // executing direct syscall instructions that the supervisor doesn't
+        // yet handle.
+        if let Ok(c_name) = std::ffi::CString::new(name) {
+            let addr = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c_name.as_ptr()) };
+            if !addr.is_null() {
+                debug!("Resolved {} via dlsym to 0x{:x}", name, addr as u64);
+                return Some(addr as u64);
+            }
+        }
+
         for library in &self.libraries {
             if skip_same_object && library.elf.base_address == requesting_object.base_address {
                 continue;
@@ -589,4 +616,13 @@ impl DynamicLinker {
             library_name
         )))
     }
+}
+
+/// Static TLSDESC resolver: returns the TP-relative offset stored at [%rax+8].
+/// Called with the TLSDESC descriptor address in %rax. Must preserve all
+/// registers except %rax and the condition flags.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+unsafe extern "C" fn tlsdesc_return() {
+    std::arch::naked_asm!("mov rax, [rax + 8]", "ret");
 }

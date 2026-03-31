@@ -8,6 +8,8 @@ TESTS += prctl
 TESTS += set_tid_address
 TESTS += set_robust_list
 TESTS += sched_yield
+TESTS += ifunc
+TESTS += tpoff64
 
 ASFLAGS = -fPIE
 LDFLAGS = -pie

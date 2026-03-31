@@ -14,8 +14,10 @@
 pub mod darwin;
 #[cfg(target_os = "macos")]
 pub mod dlfcn;
+pub mod io;
 pub mod malloc;
 #[cfg(target_os = "macos")]
 pub mod pthread;
 pub mod rand;
+pub mod string;
 pub mod time;
